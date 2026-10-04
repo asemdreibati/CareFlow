@@ -7,15 +7,29 @@ import type { Response } from 'express';
  *  - unique violations and the appointment overlap exclusion → 409 Conflict
  *  - missing rows → 404
  */
-@Catch(Prisma.PrismaClientKnownRequestError)
+@Catch(Prisma.PrismaClientKnownRequestError, Prisma.PrismaClientUnknownRequestError)
 export class PrismaExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(PrismaExceptionFilter.name);
 
-  catch(exception: Prisma.PrismaClientKnownRequestError, host: ArgumentsHost) {
+  catch(exception: Prisma.PrismaClientKnownRequestError | Prisma.PrismaClientUnknownRequestError, host: ArgumentsHost) {
     const res = host.switchToHttp().getResponse<Response>();
-    const http = this.translate(exception);
+    const http =
+      exception instanceof Prisma.PrismaClientKnownRequestError
+        ? this.translate(exception)
+        : this.translateUnknown(exception);
     if (http.getStatus() >= 500) this.logger.error(exception.message, exception.stack);
     res.status(http.getStatus()).json(http.getResponse());
+  }
+
+  /** Exclusion-constraint violations arrive without a Prisma error code. */
+  private translateUnknown(e: Prisma.PrismaClientUnknownRequestError): HttpException {
+    if (e.message.includes('appointments_no_overlap')) {
+      return new ConflictException('This time slot overlaps another appointment for the doctor');
+    }
+    if (e.message.includes('is append-only')) {
+      return new ConflictException('This record is append-only and cannot be modified');
+    }
+    return new HttpException({ statusCode: 500, message: 'Database error' }, 500);
   }
 
   private translate(e: Prisma.PrismaClientKnownRequestError): HttpException {
