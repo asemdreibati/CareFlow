@@ -2,19 +2,21 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { ClinicApi } from '../../core/api/clinic.api';
 import { AppointmentsApi } from '../../core/api/appointments.api';
+import { SchedulingApi } from '../../core/api/scheduling.api';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
 import { Appointment, AppointmentStatus, ClinicStats } from '../../core/models';
-import { dayRange, fmtTime } from '../../core/date-utils';
+import { dayRange, fmtTime, isoDate } from '../../core/date-utils';
 import { money } from '../../core/money';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { StatusChipComponent } from '../../shared/status-chip';
 import { HasPermissionDirective } from '../../core/permission.directive';
+import { RiskBadgeComponent } from '../../shared/risk-badge';
 import { fmtDate } from '../../core/date-utils';
 
 @Component({
   selector: 'cf-dashboard',
-  imports: [RouterLink, PageHeaderComponent, StatusChipComponent, HasPermissionDirective],
+  imports: [RouterLink, PageHeaderComponent, StatusChipComponent, HasPermissionDirective, RiskBadgeComponent],
   template: `
     <div class="page">
       <cf-page-header title="Dashboard" [subtitle]="greeting()">
@@ -32,6 +34,30 @@ import { fmtDate } from '../../core/date-utils';
         <div class="inline-alert info">{{ statsError() }}</div>
       }
 
+      @if (canSchedule) {
+        <div class="card mb-2 at-risk">
+          <div class="card-header">
+            <h2>At risk today <span class="muted small">— predicted no-shows (≥ 50%)</span></h2>
+            <div class="row gap-1"><a class="btn sm" routerLink="/waitlist">Waitlist</a><a class="btn sm" routerLink="/settings" [queryParams]="{ tab: 'noshow' }">Model</a></div>
+          </div>
+          @if (riskError()) { <div class="empty">{{ riskError() }}</div> }
+          @else if (!atRisk().length) { <div class="empty">No appointment today is predicted as a likely no-show.</div> }
+          @else {
+            <div class="risk-list">
+              @for (a of atRisk(); track a.id) {
+                <a class="risk-item" [routerLink]="['/appointments', a.id]">
+                  <cf-risk-badge [risk]="a.noShowRisk" />
+                  <span class="mono nowrap">{{ fmtTime(a.startsAt) }}</span>
+                  <span class="flex-1 truncate"><strong>{{ a.patient?.firstName }} {{ a.patient?.lastName }}</strong> <span class="muted">· {{ a.doctor?.firstName }} {{ a.doctor?.lastName }}</span></span>
+                  @if (a.patient?.phone) { <span class="muted small nowrap">{{ a.patient?.phone }}</span> }
+                  <cf-chip [status]="a.status" />
+                </a>
+              }
+            </div>
+          }
+        </div>
+      }
+
       <div class="card">
         <div class="card-header">
           <h2>Today's appointments <span class="muted small">— {{ today }}</span>@if (isDoctorOnly()) { <span class="chip teal">My schedule</span> }</h2>
@@ -42,7 +68,7 @@ import { fmtDate } from '../../core/date-utils';
         @else {
           <div class="table-wrap">
             <table class="table">
-              <thead><tr><th>Time</th><th>Patient</th><th>Doctor</th><th>Type</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Time</th><th>Patient</th><th>Doctor</th><th>Type</th><th>Status</th><th>Risk</th><th></th></tr></thead>
               <tbody>
                 @for (a of appointments(); track a.id) {
                   <tr>
@@ -51,6 +77,7 @@ import { fmtDate } from '../../core/date-utils';
                     <td><span class="row gap-1"><span class="pill-color" [style.background]="a.doctor?.color || '#94a3b8'"></span>{{ a.doctor?.title }} {{ a.doctor?.firstName }} {{ a.doctor?.lastName }}</span></td>
                     <td><span class="muted">{{ a.type || '—' }}</span></td>
                     <td><cf-chip [status]="a.status" /></td>
+                    <td><cf-risk-badge [risk]="a.noShowRisk" /></td>
                     <td class="actions">
                       <ng-container *hasPermission="'appointments:write'">
                         @for (next of quickActions(a.status); track next) {
@@ -60,7 +87,7 @@ import { fmtDate } from '../../core/date-utils';
                       <a class="btn xs ghost" [routerLink]="['/appointments', a.id]">Open</a>
                     </td>
                   </tr>
-                } @empty { <tr><td colspan="6" class="empty">No appointments today.</td></tr> }
+                } @empty { <tr><td colspan="7" class="empty">No appointments today.</td></tr> }
               </tbody>
             </table>
           </div>
@@ -68,10 +95,18 @@ import { fmtDate } from '../../core/date-utils';
       </div>
     </div>
   `,
+  styles: [`
+    .at-risk { border-color: #fde68a; }
+    .risk-list { display: flex; flex-direction: column; }
+    .risk-item { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--cf-border); color: inherit; }
+    .risk-item:last-child { border-bottom: none; }
+    .risk-item:hover { background: var(--cf-surface-2); text-decoration: none; }
+  `],
 })
 export class DashboardPage {
   private readonly clinicApi = inject(ClinicApi);
   private readonly apptApi = inject(AppointmentsApi);
+  private readonly scheduling = inject(SchedulingApi);
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
   readonly money = (v: number) => money(v, this.auth.clinic()?.currency);
@@ -83,6 +118,9 @@ export class DashboardPage {
   readonly loading = signal(true);
   readonly apptError = signal<string | null>(null);
   readonly busy = signal<string | null>(null);
+  readonly atRisk = signal<Appointment[]>([]);
+  readonly riskError = signal<string | null>(null);
+  readonly canSchedule = this.auth.hasPermission('scheduling:manage');
   readonly labels: Record<string, string> = { CONFIRMED: 'Confirm', CHECKED_IN: 'Check in', IN_PROGRESS: 'Start', COMPLETED: 'Complete' };
   readonly isDoctorOnly = computed(() => !!this.auth.doctorId() && !this.auth.hasPermission('appointments:read_all'));
   readonly greeting = computed(() => `Welcome back, ${this.auth.user()?.firstName ?? ''}`);
@@ -90,6 +128,12 @@ export class DashboardPage {
   constructor() {
     this.clinicApi.stats().subscribe({ next: (s) => this.stats.set(s), error: () => this.statsError.set('Clinic stats are unavailable.') });
     this.loadToday();
+    if (this.canSchedule) {
+      this.scheduling.atRisk(isoDate(new Date())).subscribe({
+        next: (list) => this.atRisk.set([...list].sort((a, b) => (b.noShowRisk ?? 0) - (a.noShowRisk ?? 0))),
+        error: () => this.riskError.set('No-show predictions are not available yet.'),
+      });
+    }
   }
 
   loadToday() {

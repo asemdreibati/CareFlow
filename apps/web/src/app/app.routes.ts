@@ -33,6 +33,18 @@ export const routes: Routes = [
       },
       { path: 'calendar', canActivate: [permissionGuard('appointments:read')], loadComponent: () => import('./pages/calendar/calendar').then((m) => m.CalendarPage) },
       { path: 'appointments/:id', canActivate: [permissionGuard('appointments:read')], loadComponent: () => import('./pages/appointments/appointment-detail').then((m) => m.AppointmentDetailPage) },
+      { path: 'series/:id', canActivate: [permissionGuard('appointments:read')], loadComponent: () => import('./pages/series/series-detail').then((m) => m.SeriesDetailPage) },
+      { path: 'waitlist', canActivate: [permissionGuard('appointments:read')], loadComponent: () => import('./pages/waitlist/waitlist').then((m) => m.WaitlistPage) },
+      { path: 'resources', canActivate: [permissionGuard('doctors:read')], loadComponent: () => import('./pages/resources/resources').then((m) => m.ResourcesPage) },
+      {
+        path: 'scheduling',
+        canActivate: [permissionGuard('scheduling:manage')],
+        children: [
+          { path: '', pathMatch: 'full', redirectTo: 'proposals' },
+          { path: 'proposals', loadComponent: () => import('./pages/scheduling/proposals').then((m) => m.ProposalsPage) },
+          { path: 'proposals/:id', loadComponent: () => import('./pages/scheduling/proposal-detail').then((m) => m.ProposalDetailPage) },
+        ],
+      },
       { path: 'encounters/:id', canActivate: [permissionGuard('records:read')], loadComponent: () => import('./pages/encounters/encounter-editor').then((m) => m.EncounterEditorPage) },
       {
         path: 'billing',

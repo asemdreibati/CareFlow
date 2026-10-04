@@ -115,16 +115,28 @@ export interface Appointment {
   createdById?: string | null; createdAt: string; updatedAt: string;
   doctor?: DoctorRef; patient?: PatientRef;
   encounter?: { id: string; status: EncounterStatus } | null;
+  // Scheduling engine (docs/SCHEDULING.md)
+  /** Optimistic-locking version; sent back as `If-Match` on PATCH / status changes. */
+  version?: number;
+  holdExpiresAt?: string | null;
+  /** Predicted no-show probability 0..1 (null until a model exists). */
+  noShowRisk?: number | null;
+  seriesId?: string | null;
+  occurrenceIndex?: number | null;
+  isException?: boolean;
+  resources?: ResourceRef[];
+  series?: Pick<AppointmentSeries, 'id' | 'frequency' | 'interval' | 'count' | 'until' | 'status'> | null;
 }
 export interface AppointmentQuery {
   from?: string; to?: string; doctorId?: string; patientId?: string; status?: AppointmentStatus; page?: number; pageSize?: number;
 }
 export interface CreateAppointmentDto {
   doctorId: string; patientId: string; startsAt: string; endsAt?: string; durationMinutes?: number;
-  type?: AppointmentType; reason?: string; notes?: string;
+  type?: AppointmentType; reason?: string; notes?: string; resourceIds?: string[]; idempotencyKey?: string;
 }
 export interface UpdateAppointmentDto {
   startsAt?: string; endsAt?: string; doctorId?: string; type?: AppointmentType; reason?: string; notes?: string;
+  resourceIds?: string[]; expectedVersion?: number;
 }
 export interface AvailabilityResponse { date: string; slots: { startsAt: string; endsAt: string }[]; }
 
@@ -202,4 +214,111 @@ export interface AuditRow {
 }
 export interface AuditQuery {
   entityType?: string; entityId?: string; actorUserId?: string; action?: string; from?: string; to?: string; page?: number; pageSize?: number;
+}
+
+// ====================== Scheduling engine (docs/SCHEDULING.md) ======================
+
+/** Acceptable time window on a weekday (0 = Sunday … 6 = Saturday), "HH:mm" local clinic time. */
+export interface PreferredWindow { weekday: number; startTime: string; endTime: string; }
+
+// ---------- Smart slot search ----------
+export interface SlotSearchQuery {
+  durationMinutes: number; doctorId?: string; specialty?: string; from?: string; to?: string; preferredDoctorId?: string;
+  preferredWindows?: PreferredWindow[]; resourceIds?: string[]; limit?: number; patientId?: string;
+}
+export interface SlotCandidate {
+  doctor: DoctorRef & { specialty?: string }; startsAt: string; endsAt: string; score: number; reasons?: string[];
+}
+export interface SlotSearchResponse { query: Record<string, unknown>; candidates: SlotCandidate[]; }
+
+// ---------- Resources ----------
+export type ResourceType = 'ROOM' | 'EQUIPMENT' | 'STAFF' | 'OTHER';
+export const RESOURCE_TYPES: ResourceType[] = ['ROOM', 'EQUIPMENT', 'STAFF', 'OTHER'];
+export interface Resource {
+  id: string; name: string; type: ResourceType; color?: string | null; notes?: string | null; isActive: boolean; createdAt?: string;
+}
+export type ResourceRef = Pick<Resource, 'id' | 'name' | 'type' | 'color'>;
+export interface ResourceDto { name: string; type: ResourceType; color?: string; notes?: string; isActive?: boolean; }
+export interface ResourceBooking {
+  id: string; resourceId: string; appointmentId: string; startsAt: string; endsAt: string; active: boolean;
+  appointment?: Pick<Appointment, 'id' | 'status' | 'type' | 'startsAt' | 'endsAt' | 'doctorId' | 'patientId'> & { doctor?: DoctorRef; patient?: PatientRef };
+}
+export interface ResourceAvailabilityResponse { date: string; resourceIds?: string[]; slots: { startsAt: string; endsAt: string }[]; }
+
+// ---------- Waitlist ----------
+export type WaitlistPriority = 'ROUTINE' | 'SOON' | 'URGENT';
+export const WAITLIST_PRIORITIES: WaitlistPriority[] = ['URGENT', 'SOON', 'ROUTINE'];
+export type WaitlistStatus = 'WAITING' | 'OFFERED' | 'BOOKED' | 'EXPIRED' | 'CANCELLED';
+export const WAITLIST_STATUSES: WaitlistStatus[] = ['WAITING', 'OFFERED', 'BOOKED', 'EXPIRED', 'CANCELLED'];
+export interface WaitlistEntry {
+  id: string; patientId: string; doctorId?: string | null; specialty?: string | null; durationMinutes: number; priority: WaitlistPriority;
+  earliestAt: string; latestAt?: string | null; preferredWindows: PreferredWindow[]; type?: AppointmentType | null; notes?: string | null;
+  status: WaitlistStatus; offeredAppointmentId?: string | null; offerExpiresAt?: string | null; offerCount: number;
+  createdAt: string; updatedAt: string;
+  patient?: PatientRef; doctor?: DoctorRef | null; offeredAppointment?: Appointment | null;
+}
+export interface WaitlistDto {
+  patientId: string; doctorId?: string; specialty?: string; durationMinutes?: number; priority?: WaitlistPriority;
+  earliestAt?: string; latestAt?: string; preferredWindows?: PreferredWindow[]; type?: AppointmentType; notes?: string;
+}
+export interface WaitlistQuery { status?: WaitlistStatus; doctorId?: string; page?: number; pageSize?: number; }
+
+// ---------- Recurring series ----------
+export type RecurrenceFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY';
+export const RECURRENCE_FREQUENCIES: RecurrenceFrequency[] = ['DAILY', 'WEEKLY', 'MONTHLY'];
+export type SeriesStatus = 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+export type SeriesResolvePolicy = 'skip' | 'next-slot' | 'fail';
+export interface AppointmentSeries {
+  id: string; doctorId: string; patientId: string; frequency: RecurrenceFrequency; interval: number; byWeekday: number[];
+  byMonthDay?: number | null; startsOn: string; startTime: string; durationMinutes: number; count?: number | null; until?: string | null;
+  type?: AppointmentType | null; reason?: string | null; status: SeriesStatus; createdAt: string; updatedAt?: string;
+  doctor?: DoctorRef; patient?: PatientRef; appointments?: Appointment[]; occurrences?: Appointment[];
+}
+export interface CreateSeriesDto {
+  doctorId: string; patientId: string; frequency: RecurrenceFrequency; interval?: number; byWeekday?: number[]; byMonthDay?: number;
+  startsOn: string; startTime: string; durationMinutes: number; count?: number; until?: string; type?: AppointmentType; reason?: string;
+  resolve?: SeriesResolvePolicy;
+}
+export interface SkippedOccurrence { index: number; plannedStartsAt: string; reason: string; }
+export interface CreateSeriesResponse { series: AppointmentSeries; created: Appointment[]; skipped: SkippedOccurrence[]; }
+
+// ---------- Reschedule proposals ----------
+export type ProposalStatus = 'PENDING' | 'APPLIED' | 'PARTIALLY_APPLIED' | 'DISMISSED';
+export interface ProposalItem {
+  appointmentId: string; patientId?: string; patientName?: string;
+  /** Original start (ISO). */
+  from: string;
+  /** Proposed start (ISO); null when no slot was found (unresolved). */
+  to: string | null; toEndsAt?: string | null;
+  fromDoctorId: string; toDoctorId: string | null; toDoctorName?: string | null;
+  durationMinutes?: number; displacementMinutes: number; cost?: number | null; version?: number; applied?: boolean; error?: string | null;
+}
+export interface RescheduleProposal {
+  id: string; cause: string; doctorTimeOffId?: string | null; items: ProposalItem[]; unresolvedAppointmentIds: string[];
+  totalDisplacementMinutes: number; status: ProposalStatus; createdById?: string | null; appliedById?: string | null;
+  appliedAt?: string | null; createdAt: string;
+  doctor?: DoctorRef; unresolvedAppointments?: Appointment[];
+}
+export interface TimeOffImpactDto { doctorId: string; startsAt: string; endsAt: string; allowOtherDoctors?: boolean; searchDays?: number; }
+export interface AffectedAppointment {
+  id: string; patientId: string; patientName: string; doctorId: string; startsAt: string; endsAt: string; status: AppointmentStatus;
+  type?: AppointmentType | null; version?: number;
+}
+/** Preview of a planned time off (not persisted): displaced appointments + the computed moves. */
+export interface TimeOffImpact {
+  doctor?: DoctorRef & { specialty?: string }; timeOff?: { startsAt: string; endsAt: string }; searchWindow?: { from: string; to: string };
+  candidateCount?: number; affected: AffectedAppointment[]; items: ProposalItem[]; unresolvedAppointmentIds: string[]; totalDisplacementMinutes: number;
+}
+export interface CreateProposalDto extends TimeOffImpactDto { reason?: string; createTimeOff?: boolean; }
+
+// ---------- No-show model + reminders ----------
+export interface NoShowModelMetrics { accuracy?: number; auc?: number; positiveRate?: number; n?: number; }
+export interface NoShowModel {
+  id?: string; sampleSize?: number; metrics?: NoShowModelMetrics | null; trainedAt: string; parameters?: unknown;
+}
+export type ReminderChannel = 'IN_APP' | 'EMAIL' | 'SMS';
+export type ReminderStatus = 'PENDING' | 'SENT' | 'FAILED' | 'CANCELLED';
+export interface Reminder {
+  id: string; appointmentId: string; channel: ReminderChannel; scheduledFor: string; status: ReminderStatus; attempts: number;
+  lastError?: string | null; sentAt?: string | null; createdAt: string;
 }

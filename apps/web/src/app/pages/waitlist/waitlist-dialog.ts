@@ -1,0 +1,105 @@
+import { Component, computed, inject, input, output, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { WaitlistApi } from '../../core/api/waitlist.api';
+import { clean } from '../../core/api/http-utils';
+import { ToastService, errorMessage } from '../../core/toast.service';
+import { APPOINTMENT_TYPES, AppointmentType, Doctor, PatientRef, PreferredWindow, WAITLIST_PRIORITIES, WaitlistEntry, WaitlistPriority } from '../../core/models';
+import { normalizeWindows, validateWindows } from '../../core/scheduling/preferred-windows';
+import { DialogComponent } from '../../shared/dialog';
+import { PatientSearchComponent } from '../../shared/patient-search';
+import { PreferredWindowsEditorComponent } from '../../shared/preferred-windows-editor';
+
+@Component({
+  selector: 'cf-waitlist-dialog',
+  imports: [FormsModule, DialogComponent, PatientSearchComponent, PreferredWindowsEditorComponent],
+  template: `
+    <cf-dialog title="Add to waitlist" [width]="620" (closed)="closed.emit()">
+      @if (error()) { <div class="inline-alert error">{{ error() }}</div> }
+      <div class="form-grid">
+        <div class="field span-2"><label class="req">Patient</label><cf-patient-search [initial]="initialPatient()" (selectedChange)="patient.set($event)" /></div>
+        <div class="field span-2"><label>Looking for</label>
+          <div class="row gap-1 wrap">
+            <div class="seg">
+              <button type="button" [class.on]="mode() === 'doctor'" (click)="mode.set('doctor')">Specific doctor</button>
+              <button type="button" [class.on]="mode() === 'specialty'" (click)="mode.set('specialty')">Any doctor of a specialty</button>
+            </div>
+            @if (mode() === 'doctor') {
+              <select class="input flex-1" style="min-width: 200px" [ngModel]="doctorId()" (ngModelChange)="doctorId.set($event)">
+                <option value="">Select doctor…</option>
+                @for (d of doctors(); track d.id) { <option [value]="d.id">{{ d.title }} {{ d.firstName }} {{ d.lastName }} — {{ d.specialty }}</option> }
+              </select>
+            } @else {
+              <select class="input flex-1" style="min-width: 200px" [ngModel]="specialty()" (ngModelChange)="specialty.set($event)">
+                <option value="">Select specialty…</option>
+                @for (s of specialties(); track s) { <option [value]="s">{{ s }}</option> }
+              </select>
+            }
+          </div>
+        </div>
+        <div class="field"><label>Duration</label>
+          <select class="input" [(ngModel)]="durationMinutes">@for (m of [15, 20, 30, 45, 60, 90]; track m) { <option [ngValue]="m">{{ m }} minutes</option> }</select>
+        </div>
+        <div class="field"><label>Priority</label>
+          <select class="input" [(ngModel)]="priority">@for (p of priorities; track p) { <option [value]="p">{{ p.toLowerCase() }}</option> }</select>
+        </div>
+        <div class="field"><label>Type</label>
+          <select class="input" [(ngModel)]="type">@for (t of types; track t) { <option [value]="t">{{ t }}</option> }</select>
+        </div>
+        <div class="field"><label>Earliest</label><input class="input" type="datetime-local" [(ngModel)]="earliestAt" /></div>
+        <div class="field"><label>Latest <span class="subtle">(optional)</span></label><input class="input" type="datetime-local" [(ngModel)]="latestAt" /></div>
+        <div class="field span-2"><label>Preferred windows</label><cf-preferred-windows [windows]="windows()" (windowsChange)="windows.set($event)" /></div>
+        <div class="field span-2"><label>Notes</label><textarea class="input" rows="2" [(ngModel)]="notes" placeholder="Context for the receptionist…"></textarea></div>
+      </div>
+      <div footer>
+        <button type="button" class="btn" (click)="closed.emit()">Cancel</button>
+        <button type="button" class="btn primary" (click)="save()" [disabled]="!valid() || saving()">{{ saving() ? 'Adding…' : 'Add entry' }}</button>
+      </div>
+    </cf-dialog>
+  `,
+  styles: [`
+    .seg { display: inline-flex; border: 1px solid var(--cf-border-strong); border-radius: 6px; overflow: hidden; }
+    .seg button { border: none; background: #fff; padding: 0 12px; height: 36px; font: inherit; font-size: 12.5px; cursor: pointer; }
+    .seg button.on { background: var(--cf-primary); color: #fff; }
+  `],
+})
+export class WaitlistDialogComponent {
+  private readonly api = inject(WaitlistApi);
+  private readonly toast = inject(ToastService);
+  readonly doctors = input.required<Doctor[]>();
+  readonly initialPatient = input<PatientRef | null>(null);
+  readonly closed = output<void>();
+  readonly saved = output<WaitlistEntry>();
+  readonly priorities = WAITLIST_PRIORITIES;
+  readonly types = APPOINTMENT_TYPES;
+  readonly patient = signal<PatientRef | null>(null);
+  readonly mode = signal<'doctor' | 'specialty'>('doctor');
+  readonly doctorId = signal('');
+  readonly specialty = signal('');
+  readonly windows = signal<PreferredWindow[]>([]);
+  readonly saving = signal(false);
+  readonly error = signal<string | null>(null);
+  durationMinutes = 30; priority: WaitlistPriority = 'ROUTINE'; type: AppointmentType = 'CONSULTATION'; earliestAt = ''; latestAt = ''; notes = '';
+  readonly specialties = computed(() => [...new Set(this.doctors().map((d) => d.specialty).filter(Boolean))].sort());
+  readonly valid = computed(() => !!this.patient() && (this.mode() === 'doctor' ? !!this.doctorId() : !!this.specialty()) && !validateWindows(this.windows()));
+
+  ngOnInit() { this.patient.set(this.initialPatient()); }
+
+  save() {
+    if (!this.valid()) return;
+    this.saving.set(true); this.error.set(null);
+    const dto = clean({
+      patientId: this.patient()!.id,
+      doctorId: this.mode() === 'doctor' ? this.doctorId() : undefined,
+      specialty: this.mode() === 'specialty' ? this.specialty() : undefined,
+      durationMinutes: Number(this.durationMinutes), priority: this.priority, type: this.type,
+      earliestAt: this.earliestAt ? new Date(this.earliestAt).toISOString() : undefined,
+      latestAt: this.latestAt ? new Date(this.latestAt).toISOString() : undefined,
+      preferredWindows: this.windows().length ? normalizeWindows(this.windows()) : undefined,
+      notes: this.notes.trim(),
+    });
+    this.api.create(dto as { patientId: string }).subscribe({
+      next: (e) => { this.saving.set(false); this.toast.success('Added to waitlist'); this.saved.emit(e); },
+      error: (err) => { this.saving.set(false); this.error.set(errorMessage(err)); },
+    });
+  }
+}

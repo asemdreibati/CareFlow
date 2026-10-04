@@ -13,6 +13,7 @@
       <option value="">All doctors</option>
       @for (d of doctors(); track d.id) { <option [value]="d.id">{{ d.title }} {{ d.firstName }} {{ d.lastName }}</option> }
     </select>
+    <button *hasPermission="'appointments:write'" type="button" class="btn" [class.primary]="finder()" (click)="finder.set(!finder())">⌕ Find a slot</button>
     <button *hasPermission="'appointments:write'" type="button" class="btn primary" (click)="openDialog(null, null)">+ New appointment</button>
   </cf-page-header>
 
@@ -23,6 +24,7 @@
     @if (loading()) { <span class="spinner" style="margin-left: auto"></span> }
   </div>
 
+  <div class="layout" [class.with-panel]="finder()">
   <div class="card cal" [class.day-view]="view() === 'day'">
     <div class="cal-head">
       <div class="gutter"></div>
@@ -51,8 +53,11 @@
       }
     </div>
   </div>
+  @if (finder()) { <cf-find-slot-panel [doctors]="doctors()" [initialDoctorId]="doctorId()" (closed)="finder.set(false)" (picked)="onSlotPicked($event)" /> }
+  </div>
 </div>
 
 @if (dialog(); as dlg) {
-  <cf-booking-dialog [doctors]="doctors()" [initialDoctorId]="doctorId()" [initialDate]="dlg.date" [initialPatient]="dlg.patient" (closed)="dialog.set(null)" (booked)="onBooked()" />
+  <cf-booking-dialog [doctors]="doctors()" [initialDoctorId]="dlg.doctorId || doctorId()" [initialDate]="dlg.date" [initialPatient]="dlg.patient"
+    [initialDuration]="dlg.duration ?? null" [initialResourceIds]="dlg.resourceIds ?? []" (closed)="dialog.set(null)" (booked)="onBooked()" />
 }

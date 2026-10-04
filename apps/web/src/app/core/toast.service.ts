@@ -2,7 +2,8 @@ import { Injectable, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 
 export type ToastKind = 'success' | 'error' | 'info' | 'warn';
-export interface Toast { id: number; kind: ToastKind; text: string; }
+export interface ToastAction { label: string; run: () => void; }
+export interface Toast { id: number; kind: ToastKind; text: string; action?: ToastAction; }
 
 /** Extract the API `message` (string | string[]) from an HttpErrorResponse. */
 export function errorMessage(err: unknown, fallback = 'Something went wrong'): string {
@@ -26,10 +27,16 @@ export class ToastService {
   readonly toasts = signal<Toast[]>([]);
   private seq = 0;
 
-  show(kind: ToastKind, text: string, ttl = 4500) {
+  show(kind: ToastKind, text: string, ttl = 4500, action?: ToastAction) {
     const id = ++this.seq;
-    this.toasts.update((t) => [...t, { id, kind, text }]);
+    this.toasts.update((t) => [...t, { id, kind, text, action }]);
     setTimeout(() => this.dismiss(id), ttl);
+  }
+  /** Error toast with an inline action button (e.g. "Reload" after an optimistic-locking conflict). */
+  errorWithAction(text: string, action: ToastAction) { this.show('error', text, 9000, action); }
+  /** Standard message for the optimistic-locking 409 — the caller passes what "Reload" should do. */
+  versionConflict(reload: () => void) {
+    this.errorWithAction('This appointment was modified by someone else. Reload to see the latest version.', { label: 'Reload', run: reload });
   }
   success(text: string) { this.show('success', text); }
   info(text: string) { this.show('info', text); }

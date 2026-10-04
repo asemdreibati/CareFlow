@@ -57,7 +57,9 @@
           </div>
         </div>
         <div class="card">
-          <div class="card-header"><h3>Time off</h3></div>
+          <div class="card-header"><h3>Time off</h3>
+            <a *hasPermission="'scheduling:manage'" class="btn xs" routerLink="/scheduling/proposals" [queryParams]="{ new: 1, doctorId: d.id }" title="Preview affected appointments and move them automatically">Plan time off with rescheduling</a>
+          </div>
           <div class="card-body">
             @for (t of d.timeOff ?? []; track t.id) {
               <div class="list-item">

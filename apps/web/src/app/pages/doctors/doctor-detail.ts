@@ -9,10 +9,11 @@ import { AvailabilitySlot, Doctor } from '../../core/models';
 import { WEEKDAYS, fmtDateTime, timeOptions } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { StatusChipComponent } from '../../shared/status-chip';
+import { HasPermissionDirective } from '../../core/permission.directive';
 
 @Component({
   selector: 'cf-doctor-detail',
-  imports: [FormsModule, RouterLink, PageHeaderComponent, StatusChipComponent],
+  imports: [FormsModule, RouterLink, PageHeaderComponent, StatusChipComponent, HasPermissionDirective],
   templateUrl: './doctor-detail.html',
   styles: [`
     .day { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--cf-border); align-items: start; }

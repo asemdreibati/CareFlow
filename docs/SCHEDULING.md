@@ -12,8 +12,8 @@ Everything below builds on the pure primitives in `apps/api/src/scheduling-engin
 Engine code is pure (no Nest/Prisma) and lives in `src/scheduling-engine/<feature>.ts` with
 `*.spec.ts` tests next to it. Modules under `src/modules/*` wire it to the database and HTTP.
 
-Permissions: `appointments:read|write` for search, waitlist and series; `resources:write` for the
-resource catalogue (OWNER/ADMIN); `scheduling:manage` for reschedule proposals, no-show model and
+Permissions: `appointments:read|write` for search, waitlist and series; `doctors:read` to read the
+resource catalogue and `resources:write` to change it (OWNER/ADMIN); `scheduling:manage` for reschedule proposals, no-show model and
 reminders (OWNER, ADMIN, RECEPTIONIST, NURSE).
 
 Data model additions (see `prisma/schema.prisma`): `Appointment.version`, `idempotencyKey`,
@@ -51,7 +51,7 @@ score, reasons: string[] }] }` sorted by score.
 ## 2. Resources  (`/resources`) — owner: resources module + appointments module
 
 `GET /resources?includeInactive`, `POST /resources {name,type,color?,notes?}`, `PATCH /resources/:id`,
-`GET /resources/:id/bookings?from&to` (bookings with appointment summary),
+`GET /resources/:id/bookings?from&to` → `{resource, from, to, bookings[]}` (with appointment summary),
 `GET /resources/availability?resourceIds=a,b&date=YYYY-MM-DD&durationMinutes` → free slots common to ALL
 listed resources (`intersectMany`).
 
@@ -76,8 +76,7 @@ the same transaction; the GiST constraint `resource_bookings_no_overlap` is the 
 
 `GET /waitlist?status&doctorId&page`, `POST /waitlist {patientId, doctorId? | specialty?, durationMinutes?,
 priority?, earliestAt?, latestAt?, preferredWindows?, type?, notes?}`, `PATCH /waitlist/:id`,
-`DELETE /waitlist/:id` (→ CANCELLED), `GET /waitlist/matches/:id` (slots that would satisfy this entry now,
-via the smart-search algorithm), `POST /waitlist/:id/book {startsAt, doctorId}` (book one of the
+`DELETE /waitlist/:id` (→ CANCELLED), `GET /waitlist/matches/:id` → `{entry, candidates[]}` (earliest slots that satisfy the entry), `POST /waitlist/:id/book {startsAt, doctorId}` (book one of the
 matches directly: creates the appointment and marks entry BOOKED), `POST /waitlist/:id/accept`
 (patient accepted the offered hold: clears `holdExpiresAt`, entry → BOOKED), `POST /waitlist/:id/decline`
 (cancel the held appointment, entry back to WAITING with `offerCount+1`).
@@ -116,8 +115,9 @@ Editing a single occurrence via `PATCH /appointments/:id` is allowed and sets `i
 
 ## 6. Reschedule cascade  (`/scheduling/reschedule-proposals`) — owner: scheduling module
 
-`POST /scheduling/time-off-impact {doctorId, startsAt, endsAt}` → preview: affected active
-appointments and a proposal (not persisted).
+`POST /scheduling/time-off-impact {doctorId, startsAt, endsAt, allowOtherDoctors?, searchDays?}` → preview
+(not persisted): `{doctor, timeOff, searchWindow, candidateCount, affected[], items[], unresolvedAppointmentIds,
+totalDisplacementMinutes}`; items for unresolved appointments carry `to: null`.
 `POST /scheduling/reschedule-proposals {doctorId, startsAt, endsAt, reason?, allowOtherDoctors?: boolean,
 searchDays?: number (default 14), createTimeOff?: boolean}` → computes and PERSISTS a proposal;
 when `createTimeOff` is true also inserts the `doctor_time_off` row in the same transaction
@@ -150,8 +150,8 @@ patient age (or 0), days since the patient's last visit (capped).
 `POST /scheduling/no-show-model/train` → trains on the clinic's COMPLETED vs NO_SHOW appointments
 (min 30 samples else 400), upserts `no_show_models`, returns metrics. `GET /scheduling/no-show-model`.
 Scoring: listener on `appointment.created` (and `updated`) computes `noShowRisk` and stores it when a
-model exists; `GET /appointments` and calendar already return the column. `GET /scheduling/no-show/at-risk?date`
-→ appointments of that day with risk ≥ 0.5 sorted desc (for extra reminders / controlled overbooking).
+model exists; `GET /appointments` and calendar already return the column. `GET /scheduling/no-show/at-risk?date&threshold?`
+→ `{date, timezone, threshold, items[]}`: appointments of that day with risk ≥ threshold (default 0.5) sorted desc (for extra reminders / controlled overbooking).
 A nightly `@Cron` retrains every clinic with ≥ 30 samples.
 
 Reminders: on `appointment.created|updated` upsert `reminders` rows for channels IN_APP (24h and 2h

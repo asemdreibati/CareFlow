@@ -98,6 +98,16 @@ describe('Tenancy & permissions (e2e)', () => {
     await http.post('/api/v1/auth/refresh').send({ refreshToken: rt }).expect(401);
   });
 
+  it('lists inactive patients only when asked', async () => {
+    const created = await http.post('/api/v1/patients').set('Authorization', `Bearer ${tokenA}`).send({ firstName: 'Gone', lastName: 'Soon' }).expect(201);
+    await http.delete(`/api/v1/patients/${created.body.id}`).set('Authorization', `Bearer ${tokenA}`).expect(200);
+    const active = await http.get('/api/v1/patients?search=Gone').set('Authorization', `Bearer ${tokenA}`).expect(200);
+    expect(active.body.total).toBe(0);
+    const all = await http.get('/api/v1/patients?search=Gone&includeInactive=true').set('Authorization', `Bearer ${tokenA}`).expect(200);
+    expect(all.body.total).toBe(1);
+    await http.get('/api/v1/doctors?includeInactive=true').set('Authorization', `Bearer ${tokenA}`).expect(200);
+  });
+
   it('rejects unknown body fields', async () => {
     await http.post('/api/v1/patients').set('Authorization', `Bearer ${tokenA}`).send({ firstName: 'A', lastName: 'B', clinicId: 'hack' }).expect(400);
   });

@@ -5,10 +5,13 @@
       <span>CareFlow</span>
     </div>
     <nav>
-      @for (item of nav(); track item.path) {
-        <a [routerLink]="item.path" routerLinkActive="active" (click)="sidebarOpen.set(false)">
-          <span class="ic">{{ item.icon }}</span>{{ item.label }}
-        </a>
+      @for (g of groups(); track g.label) {
+        @if (g.label) { <div class="nav-group">{{ g.label }}</div> }
+        @for (item of g.items; track item.path) {
+          <a [routerLink]="item.path" routerLinkActive="active" (click)="sidebarOpen.set(false)">
+            <span class="ic">{{ item.icon }}</span>{{ item.label }}
+          </a>
+        }
       }
     </nav>
     <div class="sidebar-footer">

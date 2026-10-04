@@ -12,6 +12,15 @@ const COLORS: Record<string, string> = {
   // allergy severity
   MILD: 'gray', MODERATE: 'amber', SEVERE: 'red', LIFE_THREATENING: 'red',
   TRUE: 'green', FALSE: 'gray',
+  // waitlist
+  WAITING: 'blue', OFFERED: 'amber', BOOKED: 'green', EXPIRED: 'gray',
+  URGENT: 'red', SOON: 'amber', ROUTINE: 'gray',
+  // reschedule proposals / reminders / series
+  PENDING: 'blue', APPLIED: 'green', PARTIALLY_APPLIED: 'amber', DISMISSED: 'gray', SENT: 'green',
+  // resources
+  ROOM: 'teal', EQUIPMENT: 'purple', STAFF: 'blue', OTHER: 'gray',
+  // reminder channels
+  IN_APP: 'blue', EMAIL: 'purple', SMS: 'teal',
 };
 
 @Component({

@@ -9,3 +9,8 @@ export * from './notifications.api';
 export * from './ai.api';
 export * from './audit.api';
 export { clean } from './http-utils';
+export * from './resources.api';
+export * from './waitlist.api';
+export * from './series.api';
+export * from './scheduling.api';
+export * from './booking-headers';

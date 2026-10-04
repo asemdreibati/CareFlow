@@ -50,4 +50,12 @@ Demo logins: `owner@demo.clinic`, `admin@demo.clinic`, `dr.salem@demo.clinic`,
 |---|---|
 | ![](docs/screenshots/patient-detail.png) | ![](docs/screenshots/booking-dialog.png) |
 
+| Find a slot (ranked search) | Waitlist board |
+|---|---|
+| ![](docs/screenshots/find-slot-panel.png) | ![](docs/screenshots/waitlist-board.png) |
+
+| Reschedule proposal | No-show risk |
+|---|---|
+| ![](docs/screenshots/proposals-detail.png) | ![](docs/screenshots/appointment-detail-risk.png) |
+
 More in [docs/screenshots](docs/screenshots).

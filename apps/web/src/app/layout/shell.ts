@@ -5,7 +5,8 @@ import { ToastService } from '../core/toast.service';
 import { NotificationsBellComponent } from './notifications-bell';
 import { UserMenuComponent } from './user-menu';
 
-interface NavItem { label: string; path: string; icon: string; perms?: string[]; any?: boolean; }
+interface NavItem { label: string; path: string; icon: string; perms?: string[]; any?: boolean; group?: string; }
+interface NavGroup { label: string | null; items: NavItem[]; }
 
 const NAV: NavItem[] = [
   { label: 'Dashboard', path: '/dashboard', icon: '▦' },
@@ -13,9 +14,12 @@ const NAV: NavItem[] = [
   { label: 'Patients', path: '/patients', icon: '☺', perms: ['patients:read'] },
   { label: 'Doctors', path: '/doctors', icon: '✚', perms: ['doctors:read'] },
   { label: 'Billing', path: '/billing', icon: '▭', perms: ['billing:read'] },
-  { label: 'Members', path: '/members', icon: '☷', perms: ['members:read'] },
-  { label: 'Audit', path: '/audit', icon: '≡', perms: ['audit:read'] },
-  { label: 'Settings', path: '/settings', icon: '⚙' },
+  { label: 'Waitlist', path: '/waitlist', icon: '⌛', perms: ['appointments:read'], group: 'Scheduling' },
+  { label: 'Resources', path: '/resources', icon: '⌂', perms: ['doctors:read'], group: 'Scheduling' },
+  { label: 'Proposals', path: '/scheduling/proposals', icon: '⇄', perms: ['scheduling:manage'], group: 'Scheduling' },
+  { label: 'Members', path: '/members', icon: '☷', perms: ['members:read'], group: 'Administration' },
+  { label: 'Audit', path: '/audit', icon: '≡', perms: ['audit:read'], group: 'Administration' },
+  { label: 'Settings', path: '/settings', icon: '⚙', group: 'Administration' },
 ];
 
 @Component({
@@ -30,6 +34,16 @@ export class ShellComponent {
   readonly sidebarOpen = signal(false);
   readonly switching = signal(false);
   readonly nav = computed(() => NAV.filter((n) => !n.perms || this.auth.hasPermission(...n.perms)));
+  /** Visible items grouped in declaration order; a group with no visible item is omitted. */
+  readonly groups = computed<NavGroup[]>(() => {
+    const out: NavGroup[] = [];
+    for (const item of this.nav()) {
+      const label = item.group ?? null;
+      const last = out[out.length - 1];
+      if (last && last.label === label) last.items.push(item); else out.push({ label, items: [item] });
+    }
+    return out;
+  });
   readonly clinics = computed(() => this.auth.session()?.clinics ?? []);
 
   switchClinic(e: Event) {

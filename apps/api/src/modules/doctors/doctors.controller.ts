@@ -1,8 +1,8 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseBoolPipe, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser, RequirePermissions } from '../../common/auth/decorators.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
-import { PaginationQuery } from '../../common/dto/pagination.dto.js';
+import { CatalogueQuery } from '../../common/dto/pagination.dto.js';
 import { Permission } from '../../common/permissions/permissions.js';
 import { CreateDoctorDto, CreateTimeOffDto, SetAvailabilityDto, UpdateDoctorDto } from './doctors.dto.js';
 import { DoctorsService } from './doctors.service.js';
@@ -15,8 +15,8 @@ export class DoctorsController {
 
   @Get()
   @RequirePermissions(Permission.DoctorsRead)
-  list(@CurrentUser() user: AuthUser, @Query() q: PaginationQuery, @Query('includeInactive', new ParseBoolPipe({ optional: true })) includeInactive?: boolean) {
-    return this.doctors.list(user.clinicId, q, includeInactive ?? false);
+  list(@CurrentUser() user: AuthUser, @Query() q: CatalogueQuery) {
+    return this.doctors.list(user.clinicId, q, q.includeInactive);
   }
 
   @Get(':id')

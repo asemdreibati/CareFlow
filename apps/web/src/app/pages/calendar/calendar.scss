@@ -24,3 +24,7 @@
 .ev-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ev-sub { font-size: 10.5px; color: var(--cf-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) { .cal-head, .cal-body { grid-template-columns: 44px repeat(7, minmax(120px, 1fr)); } .cal { overflow-x: auto; } }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.layout.with-panel { grid-template-columns: minmax(0, 1fr) 340px; }
+@media (max-width: 1100px) { .layout.with-panel { grid-template-columns: 1fr; } }

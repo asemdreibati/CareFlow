@@ -11,6 +11,7 @@ import { dayRange, weekRange } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { HasPermissionDirective } from '../../core/permission.directive';
 import { BookingDialogComponent } from './booking-dialog';
+import { FindSlotPanelComponent, SlotPick } from './find-slot-panel';
 
 export const CAL_START = 7;
 export const CAL_END = 21;
@@ -43,7 +44,7 @@ export function layoutDay(appts: Appointment[]): CalEvent[] {
 
 @Component({
   selector: 'cf-calendar',
-  imports: [PageHeaderComponent, HasPermissionDirective, BookingDialogComponent],
+  imports: [PageHeaderComponent, HasPermissionDirective, BookingDialogComponent, FindSlotPanelComponent],
   templateUrl: './calendar.html',
   styleUrl: './calendar.scss',
 })
@@ -65,7 +66,8 @@ export class CalendarPage {
   readonly appointments = signal<Appointment[]>([]);
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
-  readonly dialog = signal<{ date: Date | null; patient: PatientRef | null } | null>(null);
+  readonly dialog = signal<{ date: Date | null; patient: PatientRef | null; doctorId?: string; duration?: number; resourceIds?: string[] } | null>(null);
+  readonly finder = signal(false);
   readonly lockDoctor = !!this.auth.doctorId() && !this.auth.hasPermission('appointments:read_all');
 
   readonly days = computed(() => {
@@ -88,6 +90,7 @@ export class CalendarPage {
     this.doctorsApi.list().subscribe({ next: (d) => this.doctors.set(d), error: () => undefined });
     this.load();
     const q = this.route.snapshot.queryParamMap;
+    if (q.get('find')) { this.finder.set(true); void this.router.navigate([], { queryParams: {}, replaceUrl: true }); }
     if (q.get('new')) {
       const pid = q.get('patientId');
       if (pid) this.patientsApi.get(pid).subscribe({ next: (p) => this.openDialog(null, p), error: () => this.openDialog(null, null) });
@@ -126,5 +129,9 @@ export class CalendarPage {
   }
   openEvent(a: Appointment, e: Event) { e.stopPropagation(); void this.router.navigate(['/appointments', a.id]); }
   openDialog(date: Date | null, patient: PatientRef | null) { this.dialog.set({ date, patient }); }
+  /** A candidate from the Find-a-slot panel → booking dialog prefilled with doctor, time, duration and resources. */
+  onSlotPicked(p: SlotPick) {
+    this.dialog.set({ date: new Date(p.candidate.startsAt), patient: p.patient, doctorId: p.candidate.doctor.id, duration: p.durationMinutes, resourceIds: p.resourceIds });
+  }
   onBooked() { this.dialog.set(null); this.load(); }
 }
