@@ -17,7 +17,7 @@ const patientSummary = { select: { id: true, mrn: true, firstName: true, lastNam
 // Items have no ordering column (ids are random UUIDs); they come back in insertion order.
 const invoiceDetail = {
   patient: patientSummary,
-  items: true,
+  items: { orderBy: { position: 'asc' as const } },
   payments: { orderBy: { paidAt: 'asc' } },
 } satisfies Prisma.InvoiceInclude;
 
@@ -156,7 +156,7 @@ export class BillingService {
             dueAt: dto.dueAt ? new Date(dto.dueAt) : undefined,
             notes: dto.notes,
             createdById: user.id,
-            items: { create: totals.items.map((l) => ({ clinicId, serviceId: l.serviceId ?? undefined, description: l.description, quantity: l.quantity, unitPrice: l.unitPrice, total: l.total })) },
+            items: { create: totals.items.map((l, position) => ({ clinicId, serviceId: l.serviceId ?? undefined, description: l.description, quantity: l.quantity, unitPrice: l.unitPrice, total: l.total, position })) },
           },
           include: invoiceDetail,
         });
@@ -184,7 +184,7 @@ export class BillingService {
     const row = await this.prisma.transaction(async (tx) => {
       if (dto.items) {
         await tx.invoiceItem.deleteMany({ where: { invoiceId: id, clinicId } });
-        await tx.invoiceItem.createMany({ data: totals.items.map((l) => ({ clinicId, invoiceId: id, serviceId: l.serviceId ?? undefined, description: l.description, quantity: l.quantity, unitPrice: l.unitPrice, total: l.total })) });
+        await tx.invoiceItem.createMany({ data: totals.items.map((l, position) => ({ clinicId, invoiceId: id, serviceId: l.serviceId ?? undefined, description: l.description, quantity: l.quantity, unitPrice: l.unitPrice, total: l.total, position })) });
       }
       return tx.invoice.update({
         where: { id },
