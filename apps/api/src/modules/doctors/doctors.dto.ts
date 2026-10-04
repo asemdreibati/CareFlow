@@ -1,3 +1,4 @@
+import { PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsEmail, IsHexColor, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 
@@ -17,7 +18,7 @@ export class CreateDoctorDto {
   @IsOptional() @IsUUID() userId?: string;
 }
 
-export class UpdateDoctorDto extends CreateDoctorDto {
+export class UpdateDoctorDto extends PartialType(CreateDoctorDto) {
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
 

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: careflow
+          POSTGRES_PASSWORD: careflow
+          POSTGRES_DB: careflow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U careflow" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://careflow:careflow@localhost:5432/careflow?schema=public
+      JWT_SECRET: ci-secret-not-for-production
+      FIELD_ENCRYPTION_KEY: ci-field-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter api exec prisma migrate deploy
+      - run: pnpm --filter api lint
+      - run: pnpm --filter api exec tsc -p tsconfig.build.json --noEmit
+      - run: pnpm --filter api test
+      - run: pnpm --filter api test:e2e
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter web test -- --watch=false
+      - run: pnpm --filter web build

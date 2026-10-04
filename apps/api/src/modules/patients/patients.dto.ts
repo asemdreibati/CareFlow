@@ -1,3 +1,4 @@
+import { PartialType } from '@nestjs/swagger';
 import { AllergySeverity, Gender } from '@prisma/client';
 import { IsBoolean, IsDateString, IsEmail, IsEnum, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 
@@ -16,7 +17,7 @@ export class CreatePatientDto {
   @IsOptional() @IsString() @MaxLength(4000) notes?: string;
 }
 
-export class UpdatePatientDto extends CreatePatientDto {
+export class UpdatePatientDto extends PartialType(CreatePatientDto) {
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
