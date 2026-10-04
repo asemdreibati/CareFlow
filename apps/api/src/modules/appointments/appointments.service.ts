@@ -1,10 +1,11 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import type { AppointmentStatus, Prisma } from '@prisma/client';
+import { Prisma, type AppointmentStatus } from '@prisma/client';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { paginate } from '../../common/dto/pagination.dto.js';
 import { Permission } from '../../common/permissions/permissions.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
+import { ResourcesService, resourceSummarySelect, type ResourceSummary } from '../resources/resources.service.js';
 import type { AvailabilityQuery, CalendarQuery, CreateAppointmentDto, ListAppointmentsQuery, SetStatusDto, UpdateAppointmentDto } from './appointments.dto.js';
 import {
   addMinutes,
@@ -24,8 +25,9 @@ import {
 const doctorSelect = { id: true, userId: true, firstName: true, lastName: true, title: true, color: true } as const;
 const patientSelect = { id: true, mrn: true, firstName: true, lastName: true, phone: true } as const;
 const encounterSelect = { id: true, status: true, occurredAt: true, chiefComplaint: true, signedAt: true } as const;
+const bookingsInclude = { select: { active: true, resource: { select: resourceSummarySelect } } } as const;
 
-const listInclude = { doctor: { select: doctorSelect }, patient: { select: patientSelect } } as const;
+const listInclude = { doctor: { select: doctorSelect }, patient: { select: patientSelect }, resourceBookings: bookingsInclude } as const;
 const detailInclude = { ...listInclude, encounter: { select: encounterSelect } } as const;
 
 type AppointmentWithRelations = Prisma.AppointmentGetPayload<{ include: typeof listInclude }>;
@@ -53,8 +55,17 @@ export interface AppointmentEvent {
   createdById: string | null;
   createdAt: Date;
   updatedAt: Date;
+  version: number;
+  idempotencyKey: string | null;
+  holdExpiresAt: Date | null;
+  noShowRisk: number | null;
+  seriesId: string | null;
+  occurrenceIndex: number | null;
+  isException: boolean;
   doctor: { id: string; userId: string | null; firstName: string; lastName: string };
   patient: { id: string; firstName: string; lastName: string };
+  /** Rooms / equipment booked with the appointment (optional so other writers stay compatible). */
+  resources?: ResourceSummary[];
   /** The user who performed the action (excluded from notifications). */
   actorUserId: string;
 }
@@ -62,11 +73,25 @@ export interface AppointmentEvent {
 const MAX_CALENDAR_DAYS = 31;
 const ACTIVE_STATUS_FILTER = { notIn: [...INACTIVE_STATUSES] as AppointmentStatus[] };
 
+/**
+ * A DOCTOR without appointments:read_all is pinned to their own doctor profile.
+ * Returns the doctorId filter to apply (undefined = no restriction). Shared with
+ * the slot search so every read path applies the same rule.
+ */
+export function scopedDoctorIdFor(user: AuthUser, requested?: string): string | undefined {
+  const restricted = user.role === 'DOCTOR' && !user.permissions.has(Permission.AppointmentsReadAll);
+  if (!restricted) return requested;
+  if (!user.doctorId) throw new ForbiddenException('Your account is not linked to a doctor profile');
+  if (requested && requested !== user.doctorId) throw new ForbiddenException('You may only access your own appointments');
+  return user.doctorId;
+}
+
 @Injectable()
 export class AppointmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
+    private readonly resources: ResourcesService,
   ) {}
 
   // ─────────────────────────────── queries ───────────────────────────────
@@ -127,9 +152,18 @@ export class AppointmentsService {
 
   // ─────────────────────────────── mutations ───────────────────────────────
 
-  async create(user: AuthUser, dto: CreateAppointmentDto) {
+  /**
+   * Books an appointment (and its resources) in one transaction. With an
+   * idempotency key, a repeated call returns the original row (`replayed: true`).
+   */
+  async create(user: AuthUser, dto: CreateAppointmentDto, idempotencyKeyHeader?: string) {
     this.assertCanAccessDoctor(user, dto.doctorId);
     if (dto.endsAt && dto.durationMinutes) throw new BadRequestException('Provide either endsAt or durationMinutes, not both');
+    const idempotencyKey = this.resolveIdempotencyKey(dto.idempotencyKey, idempotencyKeyHeader);
+    if (idempotencyKey) {
+      const existing = await this.findByIdempotencyKey(user.clinicId, idempotencyKey);
+      if (existing) return { appointment: this.toView(existing), replayed: true };
+    }
 
     const [doctor, patient, timeZone] = await Promise.all([
       this.loadDoctor(user.clinicId, dto.doctorId),
@@ -142,32 +176,54 @@ export class AppointmentsService {
       : addMinutes(startsAt, dto.durationMinutes ?? defaultDurationMinutes(doctor.availability, startsAt, timeZone));
     const range = { startsAt, endsAt };
     await this.assertBookable(user.clinicId, doctor, range, timeZone);
+    const resourceIds = [...new Set(dto.resourceIds ?? [])];
 
-    const created = await this.withOverlapGuard(() =>
-      this.prisma.db.appointment.create({
-        data: {
-          clinicId: user.clinicId,
-          doctorId: doctor.id,
-          patientId: patient.id,
-          startsAt,
-          endsAt,
-          type: dto.type,
-          reason: dto.reason,
-          notes: dto.notes,
-          createdById: user.id,
-        },
-        include: detailInclude,
-      }),
-    );
+    let created: AppointmentWithRelations;
+    try {
+      created = await this.withOverlapGuard(() =>
+        this.prisma.transaction(async (tx) => {
+          await this.resources.assertAvailable(tx, user.clinicId, resourceIds, range);
+          const row = await tx.appointment.create({
+            data: {
+              clinicId: user.clinicId,
+              doctorId: doctor.id,
+              patientId: patient.id,
+              startsAt,
+              endsAt,
+              type: dto.type,
+              reason: dto.reason,
+              notes: dto.notes,
+              createdById: user.id,
+              idempotencyKey,
+            },
+            select: { id: true },
+          });
+          if (resourceIds.length > 0) {
+            await tx.resourceBooking.createMany({
+              data: resourceIds.map((resourceId) => ({ clinicId: user.clinicId, resourceId, appointmentId: row.id, startsAt, endsAt })),
+            });
+          }
+          return tx.appointment.findUniqueOrThrow({ where: { id: row.id }, include: detailInclude });
+        }),
+      );
+    } catch (err) {
+      // Two concurrent requests with the same key: the loser returns the winner's row.
+      if (idempotencyKey && this.isIdempotencyKeyConflict(err)) {
+        const existing = await this.findByIdempotencyKey(user.clinicId, idempotencyKey);
+        if (existing) return { appointment: this.toView(existing), replayed: true };
+      }
+      throw err;
+    }
     this.emit(APPOINTMENT_EVENTS.created, created, user);
-    return this.toView(created);
+    return { appointment: this.toView(created), replayed: false };
   }
 
-  async update(user: AuthUser, id: string, dto: UpdateAppointmentDto) {
+  async update(user: AuthUser, id: string, dto: UpdateAppointmentDto, expectedVersion?: number) {
     const existing = await this.loadForMutation(user, id);
     if (isFinalStatus(existing.status)) {
       throw new ConflictException(`A ${existing.status.toLowerCase()} appointment cannot be modified`);
     }
+    this.assertExpectedVersion(existing.version, expectedVersion ?? dto.expectedVersion);
     const doctorId = dto.doctorId ?? existing.doctorId;
     this.assertCanAccessDoctor(user, doctorId);
 
@@ -177,26 +233,68 @@ export class AppointmentsService {
       // Keep the original duration when only the start moves.
       endsAt = addMinutes(startsAt, (existing.endsAt.getTime() - existing.startsAt.getTime()) / 60_000);
     }
+    const range = { startsAt, endsAt };
     const scheduleChanged =
       doctorId !== existing.doctorId || startsAt.getTime() !== existing.startsAt.getTime() || endsAt.getTime() !== existing.endsAt.getTime();
 
     if (scheduleChanged) {
       const [doctor, timeZone] = await Promise.all([this.loadDoctor(user.clinicId, doctorId), this.clinicTimezone(user.clinicId)]);
-      await this.assertBookable(user.clinicId, doctor, { startsAt, endsAt }, timeZone, existing.id);
+      await this.assertBookable(user.clinicId, doctor, range, timeZone, existing.id);
     }
+    const resourceIds = dto.resourceIds ? [...new Set(dto.resourceIds)] : undefined;
+    const guardVersion = expectedVersion ?? dto.expectedVersion ?? existing.version;
 
     const updated = await this.withOverlapGuard(() =>
-      this.prisma.db.appointment.update({
-        where: { id: existing.id },
-        data: { doctorId, startsAt, endsAt, type: dto.type, reason: dto.reason, notes: dto.notes },
-        include: detailInclude,
+      this.prisma.transaction(async (tx) => {
+        // The final resource set must be free over the (possibly new) time range.
+        let finalResourceIds = resourceIds;
+        if (!finalResourceIds && scheduleChanged) {
+          const current = await tx.resourceBooking.findMany({ where: { appointmentId: existing.id, active: true }, select: { resourceId: true } });
+          finalResourceIds = current.map((b) => b.resourceId);
+        }
+        if (finalResourceIds && finalResourceIds.length > 0) {
+          await this.resources.assertAvailable(tx, user.clinicId, finalResourceIds, range, existing.id);
+        }
+
+        // Atomic optimistic lock: only the version we expect is updated.
+        const result = await tx.appointment.updateMany({
+          where: { id: existing.id, clinicId: user.clinicId, version: guardVersion },
+          data: {
+            doctorId,
+            startsAt,
+            endsAt,
+            type: dto.type,
+            reason: dto.reason,
+            notes: dto.notes,
+            version: { increment: 1 },
+            // Editing one occurrence of a series detaches it from the rule.
+            ...(existing.seriesId ? { isException: true } : {}),
+          },
+        });
+        if (result.count === 0) throw await this.versionConflict(tx, existing.id);
+
+        if (resourceIds) {
+          // Replace the booked set; rows of removed resources are deleted.
+          if (resourceIds.length === 0) await tx.resourceBooking.deleteMany({ where: { appointmentId: existing.id } });
+          else await tx.resourceBooking.deleteMany({ where: { appointmentId: existing.id, resourceId: { notIn: resourceIds } } });
+          for (const resourceId of resourceIds) {
+            await tx.resourceBooking.upsert({
+              where: { appointmentId_resourceId: { appointmentId: existing.id, resourceId } },
+              update: { startsAt, endsAt, active: true },
+              create: { clinicId: user.clinicId, resourceId, appointmentId: existing.id, startsAt, endsAt },
+            });
+          }
+        } else if (scheduleChanged) {
+          await tx.resourceBooking.updateMany({ where: { appointmentId: existing.id }, data: { startsAt, endsAt } });
+        }
+        return tx.appointment.findUniqueOrThrow({ where: { id: existing.id }, include: detailInclude });
       }),
     );
     this.emit(APPOINTMENT_EVENTS.updated, updated, user);
     return this.toView(updated);
   }
 
-  async setStatus(user: AuthUser, id: string, dto: SetStatusDto) {
+  async setStatus(user: AuthUser, id: string, dto: SetStatusDto, expectedVersion?: number) {
     const existing = await this.loadForMutation(user, id);
     if (!canTransition(existing.status, dto.status)) {
       const allowed = STATUS_TRANSITIONS[existing.status];
@@ -209,10 +307,24 @@ export class AppointmentsService {
     if (dto.cancellationNote && dto.status !== 'CANCELLED') {
       throw new BadRequestException('cancellationNote is only accepted when cancelling');
     }
-    const updated = await this.prisma.db.appointment.update({
-      where: { id: existing.id },
-      data: { status: dto.status, ...(dto.status === 'CANCELLED' ? { cancellationNote: dto.cancellationNote ?? null } : {}) },
-      include: detailInclude,
+    this.assertExpectedVersion(existing.version, expectedVersion ?? dto.expectedVersion);
+    const guardVersion = expectedVersion ?? dto.expectedVersion ?? existing.version;
+
+    const updated = await this.prisma.transaction(async (tx) => {
+      const result = await tx.appointment.updateMany({
+        where: { id: existing.id, clinicId: user.clinicId, version: guardVersion },
+        data: {
+          status: dto.status,
+          version: { increment: 1 },
+          ...(dto.status === 'CANCELLED' ? { cancellationNote: dto.cancellationNote ?? null } : {}),
+        },
+      });
+      if (result.count === 0) throw await this.versionConflict(tx, existing.id);
+      // Cancelled / no-show appointments release their rooms and equipment.
+      if (INACTIVE_STATUSES.includes(dto.status)) {
+        await tx.resourceBooking.updateMany({ where: { appointmentId: existing.id }, data: { active: false } });
+      }
+      return tx.appointment.findUniqueOrThrow({ where: { id: existing.id }, include: detailInclude });
     });
     const event =
       dto.status === 'CANCELLED' ? APPOINTMENT_EVENTS.cancelled : dto.status === 'CHECKED_IN' ? APPOINTMENT_EVENTS.checkedIn : APPOINTMENT_EVENTS.updated;
@@ -222,23 +334,12 @@ export class AppointmentsService {
 
   // ─────────────────────────────── internals ───────────────────────────────
 
-  /**
-   * A DOCTOR without appointments:read_all is pinned to their own doctor profile.
-   * Returns the doctorId filter to apply (undefined = no restriction).
-   */
   private scopedDoctorId(user: AuthUser, requested?: string): string | undefined {
-    if (!this.isRestrictedDoctor(user)) return requested;
-    if (!user.doctorId) throw new ForbiddenException('Your account is not linked to a doctor profile');
-    if (requested && requested !== user.doctorId) throw new ForbiddenException('You may only access your own appointments');
-    return user.doctorId;
+    return scopedDoctorIdFor(user, requested);
   }
 
   private assertCanAccessDoctor(user: AuthUser, doctorId: string) {
     this.scopedDoctorId(user, doctorId);
-  }
-
-  private isRestrictedDoctor(user: AuthUser): boolean {
-    return user.role === 'DOCTOR' && !user.permissions.has(Permission.AppointmentsReadAll);
   }
 
   private async loadForMutation(user: AuthUser, id: string) {
@@ -314,16 +415,22 @@ export class AppointmentsService {
   }
 
   /**
-   * The `appointments_no_overlap` exclusion constraint is the final arbiter for
-   * concurrent bookings. Prisma may surface it as an unknown request error (not
-   * handled by the global filter), so translate it here.
+   * The `appointments_no_overlap` / `resource_bookings_no_overlap` exclusion
+   * constraints are the final arbiters for concurrent bookings. Prisma may surface
+   * them as an unknown request error (not handled by the global filter), so
+   * translate them here.
    */
   private async withOverlapGuard<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
     } catch (err) {
-      if (err instanceof Error && err.message.includes('appointments_no_overlap')) {
-        throw new ConflictException('This time slot overlaps another appointment for the doctor');
+      if (err instanceof Error) {
+        if (err.message.includes('appointments_no_overlap')) {
+          throw new ConflictException('This time slot overlaps another appointment for the doctor');
+        }
+        if (err.message.includes('resource_bookings_no_overlap')) {
+          throw new ConflictException('One of the requested resources is not available at this time');
+        }
       }
       throw err;
     }
@@ -335,20 +442,57 @@ export class AppointmentsService {
     return d;
   }
 
+  // ─────────────────────────── idempotency + versions ───────────────────────────
+
+  private resolveIdempotencyKey(body?: string, header?: string): string | undefined {
+    const key = (body ?? header ?? '').trim();
+    if (!key) return undefined;
+    if (key.length > 200) throw new BadRequestException('Idempotency-Key must be at most 200 characters');
+    return key;
+  }
+
+  private findByIdempotencyKey(clinicId: string, idempotencyKey: string) {
+    return this.prisma.db.appointment.findFirst({ where: { clinicId, idempotencyKey }, include: detailInclude });
+  }
+
+  private isIdempotencyKeyConflict(err: unknown): boolean {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') return false;
+    const target = (err.meta as { target?: string[] | string } | undefined)?.target;
+    const fields = Array.isArray(target) ? target.join(',') : String(target ?? '');
+    return fields.includes('idempotency');
+  }
+
+  private assertExpectedVersion(current: number, expected?: number) {
+    if (expected !== undefined && expected !== current) {
+      throw new ConflictException(`Appointment was modified by someone else (version ${current})`);
+    }
+  }
+
+  /** Builds the 409 for a failed guarded update, reporting the version now in the database. */
+  private async versionConflict(tx: Prisma.TransactionClient, id: string): Promise<ConflictException> {
+    const row = await tx.appointment.findUnique({ where: { id }, select: { version: true } });
+    return new ConflictException(`Appointment was modified by someone else (version ${row?.version ?? 'unknown'})`);
+  }
+
+  // ─────────────────────────────── shapes ───────────────────────────────
+
   private emit(event: string, appt: AppointmentWithRelations, actor: AuthUser) {
-    const { doctor, patient, ...rest } = appt;
+    const { doctor, patient, resourceBookings, ...rest } = appt;
     const payload: AppointmentEvent = {
       ...rest,
       doctor: { id: doctor.id, userId: doctor.userId, firstName: doctor.firstName, lastName: doctor.lastName },
       patient: { id: patient.id, firstName: patient.firstName, lastName: patient.lastName },
+      resources: resourceBookings.map((b) => b.resource),
       actorUserId: actor.id,
     };
     this.events.emit(event, payload);
   }
 
-  /** API shape: hides the doctor's userId (internal routing detail). */
+  /** API shape: hides the doctor's userId (internal routing detail) and flattens resource bookings. */
   private toView<T extends AppointmentWithRelations>(appt: T) {
     const { userId: _userId, ...doctor } = appt.doctor;
-    return { ...appt, doctor };
+    const { resourceBookings, ...rest } = appt;
+    const resources = resourceBookings.map((b) => b.resource).sort((a, b) => a.name.localeCompare(b.name));
+    return { ...rest, doctor, resources };
   }
 }
