@@ -28,6 +28,10 @@ export const Permission = {
   AuditRead: 'audit:read',
   AiUse: 'ai:use',
   AiReview: 'ai:review',
+  /** Rooms/equipment catalogue. */
+  ResourcesWrite: 'resources:write',
+  /** Waitlist, recurring series, reschedule proposals, no-show model, reminders. */
+  SchedulingManage: 'scheduling:manage',
 } as const;
 
 export type PermissionKey = (typeof Permission)[keyof typeof Permission];
@@ -60,13 +64,14 @@ export const ROLE_PERMISSIONS: Record<Role, readonly PermissionKey[]> = {
     Permission.AiUse,
     Permission.AiReview,
   ],
-  NURSE: [...clinicalCore, Permission.AppointmentsReadAll, Permission.RecordsRead, Permission.RecordsWrite],
+  NURSE: [...clinicalCore, Permission.AppointmentsReadAll, Permission.RecordsRead, Permission.RecordsWrite, Permission.SchedulingManage],
   RECEPTIONIST: [
     ...clinicalCore,
     Permission.AppointmentsReadAll,
     Permission.PatientsSensitive,
     Permission.BillingRead,
     Permission.BillingWrite,
+    Permission.SchedulingManage,
   ],
   ACCOUNTANT: [
     Permission.ClinicRead,

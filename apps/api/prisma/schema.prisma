@@ -42,6 +42,9 @@ model Clinic {
   notifications  Notification[]
   auditLogs      AuditLog[]
   aiInteractions AiInteraction[]
+  resources      Resource[]
+  series         AppointmentSeries[]
+  waitlist       WaitlistEntry[]
 
   @@map("clinics")
 }
@@ -272,18 +275,37 @@ model Appointment {
   notes            String?
   cancellationNote String?           @map("cancellation_note")
   createdById      String?           @map("created_by_id") @db.Uuid
+  /// Optimistic concurrency: every update must carry the version it read.
+  version          Int               @default(1)
+  /// Client-supplied key making POST /appointments safe to retry.
+  idempotencyKey   String?           @map("idempotency_key")
+  /// Set when the slot is tentatively held (waitlist offer); auto-cancelled on expiry.
+  holdExpiresAt    DateTime?         @map("hold_expires_at") @db.Timestamptz
+  /// Predicted probability of no-show (0..1) from the clinic's model.
+  noShowRisk       Float?            @map("no_show_risk")
+  seriesId         String?           @map("series_id") @db.Uuid
+  occurrenceIndex  Int?              @map("occurrence_index")
+  /// True when this occurrence was moved/edited away from its series rule.
+  isException      Boolean           @default(false) @map("is_exception")
   createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz
 
-  clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  doctor    Doctor     @relation(fields: [doctorId], references: [id], onDelete: Restrict)
-  patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  encounter Encounter?
-  invoices  Invoice[]
+  clinic           Clinic             @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor           Doctor             @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  patient          Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  series           AppointmentSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  encounter        Encounter?
+  invoices         Invoice[]
+  resourceBookings ResourceBooking[]
+  reminders        Reminder[]
+  waitlistEntries  WaitlistEntry[]
 
+  @@unique([clinicId, idempotencyKey])
   @@index([clinicId, doctorId, startsAt])
   @@index([clinicId, patientId, startsAt])
   @@index([clinicId, startsAt])
+  @@index([clinicId, seriesId])
+  @@index([holdExpiresAt])
   @@map("appointments")
 }
 
@@ -595,4 +617,218 @@ model AiInteraction {
   @@index([clinicId, patientId, createdAt])
   @@index([clinicId, userId, createdAt])
   @@map("ai_interactions")
+}
+
+// ───────────────────────────── Scheduling engine ─────────────────────────────
+
+enum ResourceType {
+  ROOM
+  EQUIPMENT
+  STAFF
+  OTHER
+}
+
+/// A bookable non-doctor resource (room, device). Each has its own calendar.
+model Resource {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId  String       @map("clinic_id") @db.Uuid
+  name      String
+  type      ResourceType @default(ROOM)
+  color     String       @default("#6b7280")
+  /// Optional: which appointment types require this resource by default.
+  notes     String?
+  isActive  Boolean      @default(true) @map("is_active")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  clinic   Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  bookings ResourceBooking[]
+
+  @@unique([clinicId, name])
+  @@map("resources")
+}
+
+/// One row per (appointment, resource). Times are duplicated from the appointment so a
+/// GiST exclusion constraint (migration SQL) can forbid double-booking a resource.
+model ResourceBooking {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId      String   @map("clinic_id") @db.Uuid
+  resourceId    String   @map("resource_id") @db.Uuid
+  appointmentId String   @map("appointment_id") @db.Uuid
+  startsAt      DateTime @map("starts_at") @db.Timestamptz
+  endsAt        DateTime @map("ends_at") @db.Timestamptz
+  /// Mirrors Appointment.status; inactive bookings are excluded from the constraint.
+  active        Boolean  @default(true)
+
+  resource    Resource    @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@unique([appointmentId, resourceId])
+  @@index([clinicId, resourceId, startsAt])
+  @@map("resource_bookings")
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum SeriesStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+/// A recurring appointment rule (RRULE-like). Occurrences are materialised as Appointment rows.
+model AppointmentSeries {
+  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId        String              @map("clinic_id") @db.Uuid
+  doctorId        String              @map("doctor_id") @db.Uuid
+  patientId       String              @map("patient_id") @db.Uuid
+  frequency       RecurrenceFrequency
+  interval        Int                 @default(1)
+  /// For WEEKLY: 0 = Sunday … 6 = Saturday.
+  byWeekday       Int[]               @default([]) @map("by_weekday")
+  /// For MONTHLY: day of month (1..31).
+  byMonthDay      Int?                @map("by_month_day")
+  startsOn        DateTime            @map("starts_on") @db.Date
+  /// "HH:mm" in the clinic timezone.
+  startTime       String              @map("start_time")
+  durationMinutes Int                 @map("duration_minutes")
+  count           Int?
+  until           DateTime?           @db.Date
+  type            AppointmentType     @default(FOLLOW_UP)
+  reason          String?
+  status          SeriesStatus        @default(ACTIVE)
+  createdById     String?             @map("created_by_id") @db.Uuid
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([clinicId, patientId])
+  @@index([clinicId, doctorId])
+  @@map("appointment_series")
+}
+
+enum WaitlistPriority {
+  ROUTINE
+  SOON
+  URGENT
+}
+
+enum WaitlistStatus {
+  WAITING
+  OFFERED
+  BOOKED
+  EXPIRED
+  CANCELLED
+}
+
+/// A patient waiting for an earlier/any slot. Backfilled automatically when slots free up.
+model WaitlistEntry {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId         String           @map("clinic_id") @db.Uuid
+  patientId        String           @map("patient_id") @db.Uuid
+  /// Either a specific doctor or any doctor with the given specialty.
+  doctorId         String?          @map("doctor_id") @db.Uuid
+  specialty        String?
+  durationMinutes  Int              @default(30) @map("duration_minutes")
+  priority         WaitlistPriority @default(ROUTINE)
+  earliestAt       DateTime         @default(now()) @map("earliest_at") @db.Timestamptz
+  latestAt         DateTime?        @map("latest_at") @db.Timestamptz
+  /// Acceptable windows: [{ weekday: 0-6, startTime: "HH:mm", endTime: "HH:mm" }]; empty = any time.
+  preferredWindows Json             @default("[]") @map("preferred_windows")
+  type             AppointmentType  @default(CONSULTATION)
+  notes            String?
+  status           WaitlistStatus   @default(WAITING)
+  /// Slot currently offered to the patient (held appointment) and its expiry.
+  offeredAppointmentId String?      @map("offered_appointment_id") @db.Uuid
+  offerExpiresAt   DateTime?        @map("offer_expires_at") @db.Timestamptz
+  offerCount       Int              @default(0) @map("offer_count")
+  createdById      String?          @map("created_by_id") @db.Uuid
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  clinic             Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  offeredAppointment Appointment? @relation(fields: [offeredAppointmentId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, status, priority, createdAt])
+  @@index([clinicId, patientId])
+  @@map("waitlist_entries")
+}
+
+enum ReminderChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+/// Outbox for appointment reminders, processed by a periodic worker.
+model Reminder {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId      String          @map("clinic_id") @db.Uuid
+  appointmentId String          @map("appointment_id") @db.Uuid
+  channel       ReminderChannel @default(IN_APP)
+  scheduledFor  DateTime        @map("scheduled_for") @db.Timestamptz
+  status        ReminderStatus  @default(PENDING)
+  attempts      Int             @default(0)
+  lastError     String?         @map("last_error")
+  sentAt        DateTime?       @map("sent_at") @db.Timestamptz
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@unique([appointmentId, channel, scheduledFor])
+  @@index([status, scheduledFor])
+  @@map("reminders")
+}
+
+/// Per-clinic no-show prediction model (logistic regression weights), retrained periodically.
+model NoShowModel {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId   String   @unique @map("clinic_id") @db.Uuid
+  /// { bias: number, weights: Record<feature, number>, means/scales for normalisation }
+  parameters Json
+  sampleSize Int      @map("sample_size")
+  /// Training metrics, e.g. { accuracy, auc, positiveRate }
+  metrics    Json?
+  trainedAt  DateTime @default(now()) @map("trained_at") @db.Timestamptz
+
+  @@map("no_show_models")
+}
+
+enum ProposalStatus {
+  PENDING
+  APPLIED
+  PARTIALLY_APPLIED
+  DISMISSED
+}
+
+/// A computed plan to move displaced appointments (e.g. after doctor time off) into free slots.
+model RescheduleProposal {
+  id                       String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId                 String         @map("clinic_id") @db.Uuid
+  cause                    String
+  doctorTimeOffId          String?        @map("doctor_time_off_id") @db.Uuid
+  /// [{ appointmentId, patientName, from, to, fromDoctorId, toDoctorId, displacementMinutes, applied, error? }]
+  items                    Json
+  unresolvedAppointmentIds String[]       @default([]) @map("unresolved_appointment_ids")
+  totalDisplacementMinutes Int            @default(0) @map("total_displacement_minutes")
+  status                   ProposalStatus @default(PENDING)
+  createdById              String?        @map("created_by_id") @db.Uuid
+  appliedById              String?        @map("applied_by_id") @db.Uuid
+  appliedAt                DateTime?      @map("applied_at") @db.Timestamptz
+  createdAt                DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([clinicId, status, createdAt])
+  @@map("reschedule_proposals")
 }

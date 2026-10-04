@@ -1,5 +1,6 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -19,12 +20,17 @@ import { MembersModule } from './modules/members/members.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { PatientsModule } from './modules/patients/patients.module.js';
 import { RecordsModule } from './modules/records/records.module.js';
+import { ResourcesModule } from './modules/resources/resources.module.js';
+import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
+import { SeriesModule } from './modules/series/series.module.js';
+import { WaitlistModule } from './modules/waitlist/waitlist.module.js';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [loadEnv] }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }]),
     EventEmitterModule.forRoot({ wildcard: true }),
+    ScheduleModule.forRoot(),
     PrismaModule,
     CommonModule,
     AuthModule,
@@ -38,6 +44,10 @@ import { RecordsModule } from './modules/records/records.module.js';
     NotificationsModule,
     AiModule,
     AuditModule,
+    ResourcesModule,
+    WaitlistModule,
+    SeriesModule,
+    SchedulingModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
