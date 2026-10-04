@@ -11,7 +11,10 @@ fine-grained permissions, a full audit trail, and an AI assistant layer
 | Web | Angular 21 (standalone, signals) |
 | AI | `@anthropic-ai/sdk` (Claude) · `@google/genai` (Gemini) behind one provider interface |
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/API.md](docs/API.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/API.md](docs/API.md) and
+[docs/SCHEDULING.md](docs/SCHEDULING.md) (the scheduling engine: smart slot search,
+resources, waitlist backfill, recurring series, min-cost rescheduling, no-show
+prediction, reminders).
 
 ## Quick start
 

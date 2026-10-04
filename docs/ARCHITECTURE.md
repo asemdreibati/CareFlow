@@ -58,6 +58,21 @@ Overlap checks happen twice:
    tstzrange(starts_at, ends_at, '[)') WITH &&) WHERE status NOT IN ('CANCELLED','NO_SHOW')`.
    Concurrent bookings cannot both succeed; the loser gets 409.
 
+## Scheduling engine
+
+`apps/api/src/scheduling-engine/` is a pure, dependency-free library (interval
+algebra with sweep-line union/subtraction/k-way intersection, a binary heap,
+slot search scoring, recurrence expansion, min-cost bipartite matching, logistic
+regression) that the appointments, resources, waitlist, series and scheduling
+modules wire to the database. Features and algorithms are specified in
+[SCHEDULING.md](SCHEDULING.md): smart cross-doctor slot search with
+fragmentation-aware best-fit, multi-resource booking (rooms/equipment with their
+own exclusion constraints), a priority-queue waitlist with automatic backfill
+and timed holds, recurring series with per-occurrence conflict resolution,
+reschedule proposals computed by min-cost matching when a doctor takes time off,
+a per-clinic no-show prediction model, a reminder outbox worker, idempotent
+booking and optimistic locking.
+
 ## Sensitive data
 
 * Passwords: bcrypt (12 rounds). Refresh tokens: random, stored hashed, rotated on use.
