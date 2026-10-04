@@ -1,0 +1,17 @@
+{
+  "name": "careflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CareFlow - multi-tenant clinic management platform (NestJS + PostgreSQL + Angular)",
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "api": "pnpm --filter api",
+    "web": "pnpm --filter web",
+    "dev": "pnpm -r --parallel --filter api --filter web run start:dev",
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint",
+    "db:migrate": "pnpm --filter api exec prisma migrate deploy",
+    "db:seed": "pnpm --filter api run db:seed"
+  }
+}
