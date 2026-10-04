@@ -1,0 +1,80 @@
+<div class="page">
+  @if (doctor(); as d) {
+    <cf-page-header [title]="(d.title || '') + ' ' + d.firstName + ' ' + d.lastName" [subtitle]="d.specialty + (d.licenseNumber ? ' · License ' + d.licenseNumber : '')">
+      <cf-chip [status]="d.isActive" />
+      @if (canWrite) {
+        @if (d.isActive) { <button type="button" class="btn danger-outline" (click)="deactivate()">Deactivate</button> }
+        <a class="btn primary" [routerLink]="['/doctors', d.id, 'edit']">Edit</a>
+      }
+    </cf-page-header>
+
+    <div class="grid" style="grid-template-columns: 2fr 1fr">
+      <div class="col">
+        <div class="card">
+          <div class="card-header">
+            <h3>Weekly availability</h3>
+            @if (canWrite) { <button type="button" class="btn sm primary" (click)="saveAvailability()" [disabled]="!dirty() || saving()">{{ saving() ? 'Saving…' : 'Save availability' }}</button> }
+          </div>
+          <div class="card-body">
+            @for (day of dayOrder; track day) {
+              <div class="day">
+                <div class="name">{{ weekdays[day] }}</div>
+                <div>
+                  @for (s of slotsFor(day); track $index) {
+                    <div class="slot">
+                      <select class="input sm" [(ngModel)]="s.startTime" (ngModelChange)="touch()" [disabled]="!canWrite">@for (t of times; track t) { <option [value]="t">{{ t }}</option> }</select>
+                      <span class="muted">to</span>
+                      <select class="input sm" [(ngModel)]="s.endTime" (ngModelChange)="touch()" [disabled]="!canWrite">@for (t of times; track t) { <option [value]="t">{{ t }}</option> }</select>
+                      <span class="muted">slot</span>
+                      <input class="input sm" type="number" min="5" max="240" step="5" style="width: 72px" [(ngModel)]="s.slotMinutes" (ngModelChange)="touch()" [disabled]="!canWrite" />
+                      <span class="muted">min</span>
+                      @if (canWrite) { <button type="button" class="btn ghost xs danger-text" (click)="removeSlot(s)">✕</button> }
+                    </div>
+                  } @empty { <div class="muted" style="padding-top: 6px">Not available</div> }
+                  @if (canWrite) {
+                    <div class="row gap-1">
+                      <button type="button" class="btn ghost xs" (click)="addSlot(day)">+ Add window</button>
+                      @if (slotsFor(day).length && day !== 5 && day !== 6) { <button type="button" class="btn ghost xs" (click)="copyToWeekdays(day)">Copy to Sun–Thu</button> }
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <div class="card-header"><h3>Profile</h3></div>
+          <div class="card-body">
+            <dl class="kv" style="grid-template-columns: 90px 1fr">
+              <dt>Color</dt><dd><span class="pill-color" [style.background]="d.color || '#94a3b8'"></span> {{ d.color }}</dd>
+              <dt>Phone</dt><dd>{{ d.phone || '—' }}</dd>
+              <dt>Email</dt><dd>{{ d.email || '—' }}</dd>
+              <dt>Login</dt><dd>{{ d.userId ? 'Linked member' : 'Not linked' }}</dd>
+              <dt>Bio</dt><dd>{{ d.bio || '—' }}</dd>
+            </dl>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h3>Time off</h3></div>
+          <div class="card-body">
+            @for (t of d.timeOff ?? []; track t.id) {
+              <div class="list-item">
+                <div class="flex-1"><div>{{ fmt(t.startsAt) }} → {{ fmt(t.endsAt) }}</div>@if (t.reason) { <div class="subtle">{{ t.reason }}</div> }</div>
+                @if (canWrite) { <button type="button" class="btn ghost xs danger-text" (click)="removeTimeOff(t.id)">Remove</button> }
+              </div>
+            } @empty { <div class="muted">No time off scheduled.</div> }
+            @if (canWrite) {
+              <div class="divider"></div>
+              <div class="field"><label>From</label><input class="input sm" type="datetime-local" [(ngModel)]="timeOff.startsAt" /></div>
+              <div class="field"><label>To</label><input class="input sm" type="datetime-local" [(ngModel)]="timeOff.endsAt" /></div>
+              <div class="field"><label>Reason</label><input class="input sm" [(ngModel)]="timeOff.reason" placeholder="Vacation, conference…" /></div>
+              <button type="button" class="btn sm" (click)="addTimeOff()" [disabled]="addingTimeOff() || !timeOff.startsAt || !timeOff.endsAt">Add time off</button>
+            }
+          </div>
+        </div>
+      </div>
+    </div>
+  } @else { <div class="loading"><span class="spinner"></span> Loading…</div> }
+</div>

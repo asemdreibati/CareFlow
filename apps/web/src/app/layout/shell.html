@@ -1,0 +1,39 @@
+<div class="shell" [class.open]="sidebarOpen()">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="logo">C</span>
+      <span>CareFlow</span>
+    </div>
+    <nav>
+      @for (item of nav(); track item.path) {
+        <a [routerLink]="item.path" routerLinkActive="active" (click)="sidebarOpen.set(false)">
+          <span class="ic">{{ item.icon }}</span>{{ item.label }}
+        </a>
+      }
+    </nav>
+    <div class="sidebar-footer">
+      <div class="small muted">{{ auth.clinic()?.name }}</div>
+      <div class="subtle">{{ auth.role() }}</div>
+    </div>
+  </aside>
+  <div class="scrim" (click)="sidebarOpen.set(false)"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button type="button" class="btn ghost icon menu-btn" (click)="sidebarOpen.set(!sidebarOpen())" aria-label="Menu">☰</button>
+      <div class="clinic">
+        @if (clinics().length > 1) {
+          <select class="input sm" [value]="auth.clinic()?.id" (change)="switchClinic($event)" [disabled]="switching()">
+            @for (c of clinics(); track c.id) { <option [value]="c.id">{{ c.name }}</option> }
+          </select>
+        } @else {
+          <span class="clinic-name">{{ auth.clinic()?.name }}</span>
+        }
+      </div>
+      <div class="spacer"></div>
+      <cf-notifications-bell />
+      <cf-user-menu />
+    </header>
+    <main class="content"><router-outlet /></main>
+  </div>
+</div>

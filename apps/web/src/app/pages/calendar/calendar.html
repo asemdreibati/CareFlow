@@ -1,0 +1,58 @@
+<div class="page">
+  <cf-page-header title="Calendar" [subtitle]="title()">
+    <div class="row gap-1">
+      <button type="button" class="btn sm" (click)="shift(-1)">‹</button>
+      <button type="button" class="btn sm" (click)="today()">Today</button>
+      <button type="button" class="btn sm" (click)="shift(1)">›</button>
+    </div>
+    <div class="seg">
+      <button type="button" [class.on]="view() === 'week'" (click)="setView('week')">Week</button>
+      <button type="button" [class.on]="view() === 'day'" (click)="setView('day')">Day</button>
+    </div>
+    <select class="input sm" style="width: 220px" [value]="doctorId()" (change)="onDoctor($event)" [disabled]="lockDoctor">
+      <option value="">All doctors</option>
+      @for (d of doctors(); track d.id) { <option [value]="d.id">{{ d.title }} {{ d.firstName }} {{ d.lastName }}</option> }
+    </select>
+    <button *hasPermission="'appointments:write'" type="button" class="btn primary" (click)="openDialog(null, null)">+ New appointment</button>
+  </cf-page-header>
+
+  @if (error()) { <div class="inline-alert info">{{ error() }}</div> }
+
+  <div class="legend">
+    @for (d of doctors(); track d.id) { <span class="row gap-1 small"><span class="pill-color" [style.background]="d.color || '#94a3b8'"></span>{{ d.firstName }} {{ d.lastName }}</span> }
+    @if (loading()) { <span class="spinner" style="margin-left: auto"></span> }
+  </div>
+
+  <div class="card cal" [class.day-view]="view() === 'day'">
+    <div class="cal-head">
+      <div class="gutter"></div>
+      @for (d of days(); track d.getTime()) { <div class="dh" [class.today]="isToday(d)">{{ dayLabel(d) }}</div> }
+    </div>
+    <div class="cal-body">
+      <div class="gutter">
+        @for (h of hours; track h) { <div class="hour" [style.height.px]="hourPx">{{ hourLabel(h) }}</div> }
+      </div>
+      @for (d of days(); track d.getTime(); let i = $index) {
+        <div class="col-day" [class.today]="isToday(d)" (click)="onColumnClick(d, $event)" [style.height.px]="hours.length * hourPx">
+          @for (h of hours; track h) { <div class="line" [style.top.px]="(h - hours[0]) * hourPx"></div> }
+          @if (isToday(d) && nowTop() > 0) { <div class="now" [style.top.px]="nowTop()"></div> }
+          @for (ev of byDay()[i]; track ev.a.id) {
+            <button type="button" class="ev" [class.done]="ev.a.status === 'COMPLETED' || ev.a.status === 'NO_SHOW'"
+              [style.top.px]="ev.top" [style.height.px]="ev.height"
+              [style.left]="'calc(' + (ev.col * 100 / ev.cols) + '% + 2px)'" [style.width]="'calc(' + (100 / ev.cols) + '% - 4px)'"
+              [style.border-left-color]="ev.color" [style.background]="ev.color + '1a'"
+              (click)="openEvent(ev.a, $event)" [title]="timeLabel(ev.a) + ' · ' + ev.a.patient?.firstName + ' ' + ev.a.patient?.lastName + ' · ' + ev.a.status">
+              <div class="ev-time">{{ timeLabel(ev.a) }}</div>
+              <div class="ev-name">{{ ev.a.patient?.firstName }} {{ ev.a.patient?.lastName }}</div>
+              @if (ev.height > 44) { <div class="ev-sub">{{ ev.a.doctor?.lastName }} · {{ ev.a.status.replace('_', ' ') }}</div> }
+            </button>
+          }
+        </div>
+      }
+    </div>
+  </div>
+</div>
+
+@if (dialog(); as dlg) {
+  <cf-booking-dialog [doctors]="doctors()" [initialDoctorId]="doctorId()" [initialDate]="dlg.date" [initialPatient]="dlg.patient" (closed)="dialog.set(null)" (booked)="onBooked()" />
+}

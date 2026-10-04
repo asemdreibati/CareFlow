@@ -1,12 +1,11 @@
-import { Component, signal } from '@angular/core';
+import { Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
+import { ToastContainerComponent } from './shared/toast-container';
+import { ConfirmHostComponent } from './shared/confirm-dialog';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet],
-  templateUrl: './app.html',
-  styleUrl: './app.scss',
+  imports: [RouterOutlet, ToastContainerComponent, ConfirmHostComponent],
+  template: `<router-outlet /><cf-toasts /><cf-confirm-host />`,
 })
-export class App {
-  protected readonly title = signal('web');
-}
+export class App {}

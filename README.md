@@ -36,3 +36,15 @@ Demo logins: `owner@demo.clinic`, `admin@demo.clinic`, `dr.salem@demo.clinic`,
 | `pnpm --filter api lint` | oxlint |
 | `pnpm --filter web start` | Angular dev server |
 | `pnpm build` | build both apps |
+
+## Screens
+
+| Dashboard | Calendar |
+|---|---|
+| ![](docs/screenshots/dashboard.png) | ![](docs/screenshots/calendar.png) |
+
+| Patient profile | Booking dialog |
+|---|---|
+| ![](docs/screenshots/patient-detail.png) | ![](docs/screenshots/booking-dialog.png) |
+
+More in [docs/screenshots](docs/screenshots).
