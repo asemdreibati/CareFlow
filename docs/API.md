@@ -93,3 +93,10 @@ Socket.IO namespace `/notifications`, handshake `auth: { token }`, server emits 
 
 ## Audit (`/audit`) — implemented
 GET `/audit?entityType&entityId&actorUserId&action&from&to&page&pageSize` (audit:read) → paginated audit rows.
+
+## Search (`/search`, `/records/search`) — implemented (phase 3)
+GET `/search?q&limit` → `{patients, encounters, invoices, appointments}` (entity groups gated by permissions);
+GET `/search/diagnoses?q` → `[{code, description, uses}]`; GET `/records/search?q&patientId&doctorId&from&to&page&pageSize`
+→ paginated encounters with `rank` and `snippet`. `GET /patients?search=` is trigram-based and Arabic-aware
+(`careflow_normalize`). AI: POST `/ai/patients/:id/ask {question}` → `{answer, citations[], interactionId, retrieval}`;
+POST `/ai/embeddings/backfill` → `{scanned, embedded, unchanged, failed}`.
