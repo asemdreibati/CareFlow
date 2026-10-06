@@ -14,7 +14,8 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(AuthService);
   const router = inject(Router);
 
-  if (!req.url.startsWith('/api/')) return next(req);
+  // Patient-portal calls carry their own token (set by PortalApi); never attach the staff token or refresh/logout for them.
+  if (!req.url.startsWith('/api/') || req.url.includes('/api/v1/portal/')) return next(req);
   const isPublic = NO_AUTH.some((u) => req.url.startsWith(u));
 
   const withToken = (r: HttpRequest<unknown>) => {
