@@ -3,14 +3,18 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser, RequirePermissions } from '../../common/auth/decorators.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { Permission } from '../../common/permissions/permissions.js';
-import { ListInteractionsQuery, ReviewInteractionDto, SoapNoteDto } from './ai.dto.js';
+import { AskRecordDto, ListInteractionsQuery, ReviewInteractionDto, SoapNoteDto } from './ai.dto.js';
 import { AiService } from './ai.service.js';
+import { EmbeddingsService } from './embeddings.service.js';
 
 @ApiTags('ai')
 @ApiBearerAuth()
 @Controller('ai')
 export class AiController {
-  constructor(private readonly ai: AiService) {}
+  constructor(
+    private readonly ai: AiService,
+    private readonly embeddings: EmbeddingsService,
+  ) {}
 
   /** ai:use OR ai:review - checked in the handler because the guard requires ALL listed permissions. */
   @Get('status')
@@ -24,6 +28,28 @@ export class AiController {
   @Audit({ action: 'ai.summary', entity: 'AiInteraction' })
   summary(@CurrentUser() user: AuthUser, @Param('patientId', ParseUUIDPipe) patientId: string) {
     return this.ai.patientSummary(user, patientId);
+  }
+
+  /**
+   * Ask the record: answers a question from the patient's signed encounters,
+   * citing them as [E1], [E2]... Semantic retrieval when embeddings are configured,
+   * most recent encounters otherwise.
+   */
+  @Post('patients/:patientId/ask')
+  @HttpCode(200)
+  @RequirePermissions(Permission.AiUse)
+  @Audit({ action: 'ai.askRecord', entity: 'AiInteraction' })
+  ask(@CurrentUser() user: AuthUser, @Param('patientId', ParseUUIDPipe) patientId: string, @Body() dto: AskRecordDto) {
+    return this.ai.askRecord(user, patientId, dto);
+  }
+
+  /** Embeds every signed encounter of the clinic whose vector is missing or stale. Returns counts. */
+  @Post('embeddings/backfill')
+  @HttpCode(200)
+  @RequirePermissions(Permission.AiUse)
+  @Audit({ action: 'ai.embeddingsBackfill', entity: 'EncounterEmbedding' })
+  backfill(@CurrentUser() user: AuthUser) {
+    return this.embeddings.backfill(user.clinicId);
   }
 
   @Post('encounters/:encounterId/soap-note')

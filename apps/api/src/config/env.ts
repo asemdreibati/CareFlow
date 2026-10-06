@@ -18,6 +18,12 @@ export interface Env {
     geminiApiKey?: string;
     geminiModel: string;
   };
+  /** Semantic record search (pgvector). `none` disables embeddings; search still works via trigram/full-text. */
+  embedding: {
+    provider: 'gemini' | 'none';
+    model: string;
+    geminiApiKey?: string;
+  };
 }
 
 function required(name: string): string {
@@ -41,6 +47,8 @@ export function loadEnv(): Env {
   const requested = (process.env.AI_PROVIDER ?? 'claude') as 'claude' | 'gemini';
   const provider: Env['ai']['provider'] =
     requested === 'gemini' ? (geminiApiKey ? 'gemini' : 'none') : anthropicApiKey ? 'claude' : 'none';
+  const embeddingRequested = (process.env.EMBEDDING_PROVIDER ?? 'gemini') as 'gemini' | 'none';
+  const embeddingProvider: Env['embedding']['provider'] = embeddingRequested === 'gemini' && geminiApiKey ? 'gemini' : 'none';
 
   return {
     nodeEnv,
@@ -57,6 +65,11 @@ export function loadEnv(): Env {
       claudeModel: process.env.CLAUDE_MODEL ?? 'claude-opus-5-5',
       geminiApiKey,
       geminiModel: process.env.GEMINI_MODEL ?? 'gemini-2.5-pro',
+    },
+    embedding: {
+      provider: embeddingProvider,
+      model: process.env.EMBEDDING_MODEL ?? 'gemini-embedding-001',
+      geminiApiKey,
     },
   };
 }

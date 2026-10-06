@@ -22,6 +22,7 @@ import { PatientsModule } from './modules/patients/patients.module.js';
 import { RecordsModule } from './modules/records/records.module.js';
 import { ResourcesModule } from './modules/resources/resources.module.js';
 import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
+import { SearchModule } from './modules/search/search.module.js';
 import { SeriesModule } from './modules/series/series.module.js';
 import { WaitlistModule } from './modules/waitlist/waitlist.module.js';
 
@@ -48,6 +49,7 @@ import { WaitlistModule } from './modules/waitlist/waitlist.module.js';
     WaitlistModule,
     SeriesModule,
     SchedulingModule,
+    SearchModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

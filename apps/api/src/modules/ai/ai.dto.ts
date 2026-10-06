@@ -19,3 +19,8 @@ export class ListInteractionsQuery {
   @IsOptional() @IsUUID() patientId?: string;
   @IsOptional() @IsEnum(AiFeature) feature?: AiFeature;
 }
+
+export class AskRecordDto {
+  /** The clinician's question about this patient's record. Only the question and de-identified excerpts reach the model. */
+  @IsString() @MinLength(3) @MaxLength(2000) question: string;
+}

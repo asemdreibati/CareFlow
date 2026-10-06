@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { AiInteraction, AiInteractionStatus, Prisma } from '@prisma/client';
 import type { AuthUser } from '../../common/auth/auth-user.js';
@@ -13,14 +14,47 @@ import { Permission } from '../../common/permissions/permissions.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { AI_PROVIDER_TOKEN, type AiProvider } from './ai-provider.js';
 import { SOAP_FIELDS, SOAP_SCHEMA, buildPatientContext, hashContext, normalizeSoap, renderPatientContext, type SoapNote } from './ai.context.js';
-import { PATIENT_SUMMARY_SYSTEM, SOAP_NOTE_SYSTEM, renderTranscriptPrompt } from './ai.prompts.js';
-import type { ListInteractionsQuery, ReviewInteractionDto, SoapNoteDto } from './ai.dto.js';
+import { PATIENT_SUMMARY_SYSTEM, RECORD_QA_SYSTEM, SOAP_NOTE_SYSTEM, renderRecordQaPrompt, renderTranscriptPrompt, type RecordQaExcerpt } from './ai.prompts.js';
+import type { AskRecordDto, ListInteractionsQuery, ReviewInteractionDto, SoapNoteDto } from './ai.dto.js';
+import { EmbeddingsService } from './embeddings.service.js';
 
 const MAX_OUTPUT_TOKENS = 4096;
 const HISTORY_LIMIT = 50;
+/** Encounters handed to the model for "ask the record" (top-k by cosine distance, or most recent as fallback). */
+const RECORD_QA_LIMIT = 6;
+const NO_RECORD_ANSWER = 'The record contains no signed encounters for this patient yet, so this question cannot be answered from it.';
 const UPCOMING_STATUSES = ['SCHEDULED', 'CONFIRMED', 'CHECKED_IN'] as const;
 
 type EncounterHead = { id: string; patientId: string; doctorId: string; status: string };
+
+export interface RecordQaCitation {
+  ref: string;
+  encounterId: string;
+  occurredAt: Date;
+  chiefComplaint: string | null;
+}
+
+export interface RecordQaAnswer {
+  /** Markdown answer citing excerpts as [E1], [E2], ... */
+  answer: string;
+  /** Excerpts the answer refers to, in order of first mention. */
+  citations: RecordQaCitation[];
+  interactionId: string;
+  /** `semantic` when pgvector ranking was used, `recent` when embeddings are disabled or not yet built. */
+  retrieval: 'semantic' | 'recent';
+}
+
+const recordQaEncounterSelect = {
+  id: true,
+  occurredAt: true,
+  chiefComplaint: true,
+  subjective: true,
+  objective: true,
+  assessment: true,
+  plan: true,
+  diagnoses: { select: { code: true, description: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { code: 'asc' }] },
+} satisfies Prisma.EncounterSelect;
+type RecordQaEncounter = Prisma.EncounterGetPayload<{ select: typeof recordQaEncounterSelect }>;
 
 interface InteractionDraft {
   user: AuthUser;
@@ -38,6 +72,7 @@ export class AiService {
   constructor(
     @Inject(AI_PROVIDER_TOKEN) private readonly provider: AiProvider,
     private readonly prisma: PrismaService,
+    private readonly embeddings: EmbeddingsService,
   ) {}
 
   status() {
@@ -114,6 +149,79 @@ export class AiService {
       await this.recordFailure(draft, err);
       throw err;
     }
+  }
+
+  // ─────────────────────────────── Ask the record ───────────────────────────────
+
+  /**
+   * Answers a question about one patient's record from the most relevant signed
+   * encounters. Retrieval is semantic (question embedding vs `encounter_embeddings`,
+   * cosine distance) when embeddings are configured and built for the patient;
+   * otherwise it falls back to the most recent signed encounters so the feature
+   * works with only an LLM key. Needs an LLM provider (503 otherwise).
+   */
+  async askRecord(user: AuthUser, patientId: string, dto: AskRecordDto): Promise<RecordQaAnswer> {
+    if (this.provider.name === 'none') throw new ServiceUnavailableException('AI is not configured');
+    const patient = await this.prisma.db.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
+    if (!patient) throw new NotFoundException('Patient not found');
+
+    const question = dto.question.trim();
+    const { encounters, retrieval } = await this.retrieveForQuestion(user.clinicId, patientId, question);
+    const sorted = [...encounters].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+    const excerpts: RecordQaExcerpt[] = sorted.map((e, i) => ({
+      ref: `E${i + 1}`,
+      date: e.occurredAt.toISOString().slice(0, 10),
+      chiefComplaint: textOrNull(e.chiefComplaint),
+      subjective: textOrNull(e.subjective),
+      objective: textOrNull(e.objective),
+      assessment: textOrNull(e.assessment),
+      plan: textOrNull(e.plan),
+      diagnoses: e.diagnoses.map((d) => `${d.code} ${d.description}${d.isPrimary ? ' (primary)' : ''}`),
+    }));
+    const prompt = renderRecordQaPrompt(excerpts, question);
+    const draft: InteractionDraft = { user, feature: 'PATIENT_SUMMARY', patientId, inputHash: hashContext(prompt), startedAt: Date.now() };
+
+    // The clinical record was read (and excerpts sent to the provider) regardless of the outcome.
+    await this.prisma.db.recordAccessLog.create({ data: { clinicId: user.clinicId, patientId, userId: user.id, action: 'AI_RECORD_QA' } });
+
+    const sources = sorted.map((e, i) => ({ ref: `E${i + 1}`, encounterId: e.id, occurredAt: e.occurredAt, chiefComplaint: textOrNull(e.chiefComplaint) }));
+    try {
+      const result =
+        sorted.length === 0
+          ? { text: NO_RECORD_ANSWER, inputTokens: 0, outputTokens: 0 }
+          : await this.provider.generateText({ system: RECORD_QA_SYSTEM, prompt, maxTokens: MAX_OUTPUT_TOKENS });
+      const citations = citedSources(result.text, sources);
+      const structured = { kind: 'RECORD_QA', question, retrieval, citations, sources };
+      const interaction = await this.prisma.db.aiInteraction.create({
+        data: this.interactionData(draft, 'GENERATED', {
+          output: result.text,
+          structuredOutput: structured as unknown as Prisma.InputJsonValue,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+        }),
+      });
+      return { answer: result.text, citations, interactionId: interaction.id, retrieval };
+    } catch (err) {
+      await this.recordFailure(draft, err);
+      throw err;
+    }
+  }
+
+  /** Top-k encounters by cosine distance when possible, else the most recent signed ones. */
+  private async retrieveForQuestion(clinicId: string, patientId: string, question: string): Promise<{ encounters: RecordQaEncounter[]; retrieval: 'semantic' | 'recent' }> {
+    const signed = { clinicId, patientId, status: { in: ['SIGNED', 'AMENDED'] as const } } satisfies Prisma.EncounterWhereInput;
+    if (this.embeddings.enabled) {
+      const vector = await this.embeddings.embedQuery(question);
+      const hits = await this.embeddings.similarEncounters(clinicId, patientId, vector, RECORD_QA_LIMIT);
+      if (hits.length > 0) {
+        const rows = await this.prisma.db.encounter.findMany({ where: { ...signed, id: { in: hits.map((h) => h.id) } }, select: recordQaEncounterSelect });
+        const order = new Map(hits.map((h, i) => [h.id, i]));
+        rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+        return { encounters: rows, retrieval: 'semantic' };
+      }
+    }
+    const rows = await this.prisma.db.encounter.findMany({ where: signed, select: recordQaEncounterSelect, orderBy: { occurredAt: 'desc' }, take: RECORD_QA_LIMIT });
+    return { encounters: rows, retrieval: 'recent' };
   }
 
   // ───────────────────────────────── SOAP note ─────────────────────────────────
@@ -253,4 +361,25 @@ export class AiService {
       this.logger.error('Could not persist failed AI interaction', dbErr as Error);
     }
   }
+}
+
+function textOrNull(v: string | null | undefined): string | null {
+  const t = v?.trim();
+  return t ? t : null;
+}
+
+/** Sources referenced in the answer as [E1], [E2]..., in order of first mention. Unknown refs are ignored. */
+function citedSources(answer: string, sources: RecordQaCitation[]): RecordQaCitation[] {
+  const byRef = new Map(sources.map((s) => [s.ref, s]));
+  const seen = new Set<string>();
+  const out: RecordQaCitation[] = [];
+  for (const match of answer.matchAll(/\[(E\d+)\]/g)) {
+    const ref = match[1];
+    const src = byRef.get(ref);
+    if (src && !seen.has(ref)) {
+      seen.add(ref);
+      out.push(src);
+    }
+  }
+  return out;
 }

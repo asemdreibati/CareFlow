@@ -37,3 +37,42 @@ Rules:
 export function renderTranscriptPrompt(transcript: string): string {
   return `Transcript of the visit:\n\n"""\n${transcript.trim()}\n"""\n\nProduce the SOAP note JSON now.`;
 }
+
+export const RECORD_QA_SYSTEM = `You answer a clinician's question about ONE patient's medical record.
+
+You receive de-identified excerpts of the patient's signed encounters, each labelled [E1], [E2], ... with its date, chief complaint, SOAP note and diagnoses, followed by the question.
+
+Rules:
+- Answer ONLY from the excerpts. Never invent, infer or extrapolate facts, dates, results, medications or history that are not written there.
+- Cite the excerpts that support each statement with their labels, e.g. "... was recorded in March [E2]". Every factual claim needs at least one citation.
+- If the excerpts do not contain the answer, say so plainly ("The available record does not mention ...") and do not guess.
+- Do not provide diagnoses, treatment recommendations, dosing suggestions or prognoses. The clinician decides.
+- Refer to the patient as "the patient"; never guess a name or identifier.
+- Reply in the language of the question (Arabic or English) and format the answer in concise Markdown: short paragraphs or bullet points, no preamble, no closing remarks.`;
+
+export interface RecordQaExcerpt {
+  ref: string;
+  date: string;
+  chiefComplaint: string | null;
+  subjective: string | null;
+  objective: string | null;
+  assessment: string | null;
+  plan: string | null;
+  diagnoses: string[];
+}
+
+export function renderRecordQaPrompt(excerpts: RecordQaExcerpt[], question: string): string {
+  const lines: string[] = ['# Encounter excerpts (de-identified, most recent first)', ''];
+  for (const e of excerpts) {
+    lines.push(`## [${e.ref}] Visit on ${e.date}`);
+    lines.push(`- Chief complaint: ${e.chiefComplaint ?? 'not recorded'}`);
+    lines.push(`- Subjective: ${e.subjective ?? 'not recorded'}`);
+    lines.push(`- Objective: ${e.objective ?? 'not recorded'}`);
+    lines.push(`- Assessment: ${e.assessment ?? 'not recorded'}`);
+    lines.push(`- Plan: ${e.plan ?? 'not recorded'}`);
+    lines.push(`- Diagnoses: ${e.diagnoses.length ? e.diagnoses.join('; ') : 'none recorded'}`);
+    lines.push('');
+  }
+  lines.push('# Question', '', `"""`, question.trim(), `"""`, '', 'Answer the question now, citing the excerpts as [E1], [E2], ...');
+  return lines.join('\n');
+}
