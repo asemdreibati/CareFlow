@@ -30,6 +30,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
    * immediately (not only at token expiry). Permissions are resolved fresh too.
    */
   async validate(payload: JwtPayload): Promise<AuthUser> {
+    if ((payload as { type?: string }).type === 'patient') {
+      throw new UnauthorizedException('Patient portal tokens cannot access staff endpoints');
+    }
     if (payload.type !== 'access') throw new UnauthorizedException('Invalid token type');
 
     const membership = await tenantContext.runSystem(() =>

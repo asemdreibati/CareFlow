@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Encounter, PrescriptionStatus, Prisma } from '@prisma/client';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { PaginationQuery, paginate } from '../../common/dto/pagination.dto.js';
@@ -17,9 +18,27 @@ const encounterDetail = {
   prescriptions: { orderBy: { createdAt: 'desc' } },
 } satisfies Prisma.EncounterInclude;
 
+export const ENCOUNTER_EVENTS = {
+  signed: 'encounter.signed',
+  amended: 'encounter.amended',
+} as const;
+
+/** Payload of `encounter.signed` / `encounter.amended`. */
+export interface EncounterEvent {
+  id: string;
+  clinicId: string;
+  patientId: string;
+  doctorId: string;
+  status: string;
+  actorUserId: string;
+}
+
 @Injectable()
 export class RecordsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventEmitter2,
+  ) {}
 
   // ───────────────────────────── encounters ─────────────────────────────
 
@@ -94,7 +113,7 @@ export class RecordsService {
   async update(user: AuthUser, id: string, dto: UpdateEncounterDto) {
     const encounter = await this.loadForWrite(user, id);
     const { occurredAt, vitals, ...fields } = dto;
-    return this.prisma.db.encounter.update({
+    const updated = await this.prisma.db.encounter.update({
       where: { id },
       data: {
         ...fields,
@@ -104,6 +123,8 @@ export class RecordsService {
       },
       include: encounterDetail,
     });
+    if (encounter.status === 'SIGNED' || encounter.status === 'AMENDED') this.emitEncounterEvent(ENCOUNTER_EVENTS.amended, updated, user);
+    return updated;
   }
 
   /** Only the authoring doctor signs. Signing closes the linked appointment when it is still open. */
@@ -122,7 +143,23 @@ export class RecordsService {
         });
       }
       return tx.encounter.update({ where: { id }, data: { status: 'SIGNED', signedAt: new Date() }, include: encounterDetail });
+    }).then((signed) => {
+      this.emitEncounterEvent(ENCOUNTER_EVENTS.signed, signed, user);
+      return signed;
     });
+  }
+
+  /** Fire-and-forget domain event consumed by search indexing (embeddings) and future listeners. */
+  private emitEncounterEvent(event: string, encounter: { id: string; clinicId: string; patientId: string; doctorId: string; status: string }, actor: AuthUser) {
+    const payload: EncounterEvent = {
+      id: encounter.id,
+      clinicId: encounter.clinicId,
+      patientId: encounter.patientId,
+      doctorId: encounter.doctorId,
+      status: encounter.status,
+      actorUserId: actor.id,
+    };
+    this.events.emit(event, payload);
   }
 
   // ───────────────────────────── diagnoses ─────────────────────────────

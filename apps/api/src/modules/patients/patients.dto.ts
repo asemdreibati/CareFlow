@@ -1,6 +1,6 @@
 import { PartialType } from '@nestjs/swagger';
 import { AllergySeverity, Gender } from '@prisma/client';
-import { IsBoolean, IsDateString, IsEmail, IsEnum, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreatePatientDto {
   @IsString() @IsNotEmpty() firstName: string;
@@ -19,6 +19,10 @@ export class CreatePatientDto {
 
 export class UpdatePatientDto extends PartialType(CreatePatientDto) {
   @IsOptional() @IsBoolean() isActive?: boolean;
+  /** Allow this patient to log in to the patient portal (phone OTP). */
+  @IsOptional() @IsBoolean() portalEnabled?: boolean;
+  /** Preferred language for messages and the portal. */
+  @IsOptional() @IsIn(['ar', 'en']) locale?: 'ar' | 'en';
 }
 
 export class CreateAllergyDto {

@@ -15,6 +15,8 @@ export interface TenantContext {
   permissions?: ReadonlySet<string>;
   /** Doctor profile id when the user is linked to a doctor in the active clinic. */
   doctorId?: string;
+  /** Set on patient-portal requests: the authenticated patient (portal routes filter by it). */
+  patientId?: string;
   /** Only set by explicitly privileged system paths (login, provisioning, seeds). */
   bypassRls?: boolean;
   ip?: string;

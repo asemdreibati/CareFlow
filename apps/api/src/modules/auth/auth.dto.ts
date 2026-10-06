@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class LoginDto {
   @IsEmail() email: string;
@@ -35,4 +35,11 @@ export class RegisterClinicDto {
   password: string;
   @IsString() @IsNotEmpty() firstName: string;
   @IsString() @IsNotEmpty() lastName: string;
+}
+
+export class UpdateProfileDto {
+  @IsOptional() @IsIn(['ar', 'en']) locale?: 'ar' | 'en';
+  @IsOptional() @IsString() @IsNotEmpty() firstName?: string;
+  @IsOptional() @IsString() @IsNotEmpty() lastName?: string;
+  @IsOptional() @IsString() phone?: string;
 }

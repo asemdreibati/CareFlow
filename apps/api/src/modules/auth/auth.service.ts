@@ -9,7 +9,7 @@ import { resolvePermissions } from '../../common/permissions/permissions.js';
 import { tenantContext } from '../../common/tenancy/tenant-context.js';
 import type { AuthUser, JwtPayload } from '../../common/auth/auth-user.js';
 import type { Env } from '../../config/env.js';
-import type { ChangePasswordDto, LoginDto, RegisterClinicDto } from './auth.dto.js';
+import type { ChangePasswordDto, LoginDto, RegisterClinicDto, UpdateProfileDto } from './auth.dto.js';
 
 export interface TokenPair {
   accessToken: string;
@@ -18,7 +18,7 @@ export interface TokenPair {
 }
 
 export interface SessionInfo {
-  user: { id: string; email: string; firstName: string; lastName: string };
+  user: { id: string; email: string; firstName: string; lastName: string; locale: string | null };
   clinic: { id: string; name: string; slug: string; timezone: string; currency: string };
   role: Role;
   doctorId?: string;
@@ -139,6 +139,12 @@ export class AuthService {
     return this.buildSession(dbUser, user.clinicId);
   }
 
+  /** Profile fields the user may change about themselves (UI language, name, phone). */
+  async updateProfile(user: AuthUser, dto: UpdateProfileDto): Promise<SessionInfo> {
+    const updated = await tenantContext.runSystem(() => this.prisma.db.user.update({ where: { id: user.id }, data: dto }));
+    return this.buildSession(updated, user.clinicId);
+  }
+
   async changePassword(user: AuthUser, dto: ChangePasswordDto): Promise<void> {
     const dbUser = await tenantContext.runSystem(() => this.prisma.db.user.findUniqueOrThrow({ where: { id: user.id } }));
     if (!(await bcrypt.compare(dto.currentPassword, dbUser.passwordHash))) {
@@ -185,7 +191,7 @@ export class AuthService {
         select: { id: true },
       });
       return {
-        user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName },
+        user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, locale: user.locale ?? null },
         clinic: {
           id: active.clinic.id,
           name: active.clinic.name,
