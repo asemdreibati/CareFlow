@@ -2,6 +2,8 @@ import { Routes } from '@angular/router';
 import { authGuard, guestGuard, permissionGuard } from './core/guards';
 
 export const routes: Routes = [
+  // Patient-facing portal: separate auth (phone + OTP), separate shell, mobile-first.
+  { path: 'portal', loadChildren: () => import('./portal/portal.routes').then((m) => m.PORTAL_ROUTES) },
   { path: 'login', canActivate: [guestGuard], loadComponent: () => import('./pages/auth/login').then((m) => m.LoginPage) },
   { path: 'register', canActivate: [guestGuard], loadComponent: () => import('./pages/auth/register').then((m) => m.RegisterPage) },
   {

@@ -57,6 +57,8 @@ model User {
   firstName    String    @map("first_name")
   lastName     String    @map("last_name")
   phone        String?
+  /// UI language preference: "ar" | "en". Null = clinic default.
+  locale       String?
   isActive     Boolean   @default(true) @map("is_active")
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
@@ -199,11 +201,19 @@ model Patient {
   bloodType        String?   @map("blood_type")
   emergencyContact Json?     @map("emergency_contact")
   notes            String?
+  /// Patient portal: self-service access via phone OTP. Disabled by default.
+  portalEnabled    Boolean   @default(false) @map("portal_enabled")
+  /// Preferred language for messages and the portal: "ar" | "en".
+  locale           String?
+  /// Normalised, searchable text (Arabic/Latin folding) maintained by a DB trigger - see migration.
+  searchText       String?   @map("search_text")
   isActive         Boolean   @default(true) @map("is_active")
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
   clinic         Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  consents       PatientConsent[]
+  messages       Message[]
   allergies      Allergy[]
   appointments   Appointment[]
   encounters     Encounter[]
@@ -333,6 +343,8 @@ model Encounter {
   vitals         Json?
   status         EncounterStatus @default(DRAFT)
   signedAt       DateTime?       @map("signed_at") @db.Timestamptz
+  /// Full-text search vector over the SOAP fields, maintained by a DB trigger (see migration).
+  searchVector   Unsupported("tsvector")? @map("search_vector")
   createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -343,6 +355,7 @@ model Encounter {
   diagnoses     Diagnosis[]
   prescriptions Prescription[]
   invoices      Invoice[]
+  embedding     EncounterEmbedding?
 
   @@index([clinicId, patientId, occurredAt])
   @@index([clinicId, doctorId, occurredAt])
@@ -763,6 +776,7 @@ enum ReminderChannel {
   IN_APP
   EMAIL
   SMS
+  WHATSAPP
 }
 
 enum ReminderStatus {
@@ -831,4 +845,112 @@ model RescheduleProposal {
 
   @@index([clinicId, status, createdAt])
   @@map("reschedule_proposals")
+}
+
+// ───────────────────────── Search, portal & messaging ─────────────────────────
+
+/// Vector embedding of an encounter's clinical text for semantic search ("ask the record").
+/// The `embedding` column is pgvector `vector(768)`; written with raw SQL by the AI module.
+model EncounterEmbedding {
+  encounterId String   @id @map("encounter_id") @db.Uuid
+  clinicId    String   @map("clinic_id") @db.Uuid
+  patientId   String   @map("patient_id") @db.Uuid
+  model       String
+  /// sha256 of the text that was embedded, to skip re-embedding unchanged encounters.
+  contentHash String   @map("content_hash")
+  embedding   Unsupported("vector(768)")
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  encounter Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, patientId])
+  @@map("encounter_embeddings")
+}
+
+enum OtpPurpose {
+  PORTAL_LOGIN
+}
+
+/// One-time codes for patient portal login. Codes are stored hashed; rows are short-lived.
+model OtpCode {
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId   String     @map("clinic_id") @db.Uuid
+  phone      String
+  purpose    OtpPurpose @default(PORTAL_LOGIN)
+  codeHash   String     @map("code_hash")
+  expiresAt  DateTime   @map("expires_at") @db.Timestamptz
+  attempts   Int        @default(0)
+  consumedAt DateTime?  @map("consumed_at") @db.Timestamptz
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([clinicId, phone, createdAt])
+  @@map("otp_codes")
+}
+
+/// Record of a patient accepting a policy (privacy, treatment, messaging) at a given version.
+model PatientConsent {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId   String   @map("clinic_id") @db.Uuid
+  patientId  String   @map("patient_id") @db.Uuid
+  type       String // PRIVACY | TREATMENT | MESSAGING | ...
+  version    String
+  acceptedAt DateTime @default(now()) @map("accepted_at") @db.Timestamptz
+  ip         String?
+  userAgent  String?  @map("user_agent")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, type, version])
+  @@index([clinicId, patientId])
+  @@map("patient_consents")
+}
+
+enum MessageChannel {
+  SMS
+  WHATSAPP
+  EMAIL
+}
+
+enum MessageDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  RECEIVED
+}
+
+/// Every message exchanged with a patient over an external channel (audit + two-way replies).
+model Message {
+  id                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId          String           @map("clinic_id") @db.Uuid
+  patientId         String?          @map("patient_id") @db.Uuid
+  appointmentId     String?          @map("appointment_id") @db.Uuid
+  channel           MessageChannel
+  direction         MessageDirection
+  /// Phone number or email address.
+  address           String
+  body              String
+  /// Template key when generated by the system, e.g. appointment.reminder.
+  template          String?
+  status            MessageStatus    @default(QUEUED)
+  provider          String?
+  providerMessageId String?          @map("provider_message_id")
+  error             String?
+  /// For inbound replies: which outbound message/appointment this answers, and the parsed intent.
+  inReplyToId       String?          @map("in_reply_to_id") @db.Uuid
+  intent            String? // CONFIRM | CANCEL | UNKNOWN
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  sentAt            DateTime?        @map("sent_at") @db.Timestamptz
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, patientId, createdAt])
+  @@index([clinicId, appointmentId])
+  @@index([providerMessageId])
+  @@map("messages")
 }

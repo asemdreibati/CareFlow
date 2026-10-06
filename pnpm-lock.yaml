@@ -170,6 +170,12 @@ importers:
       '@angular/router':
         specifier: ^21.2.0
         version: 21.2.25(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(@angular/platform-browser@21.2.25(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2)))(rxjs@7.8.2)
+      '@ngx-translate/core':
+        specifier: ^18.0.0
+        version: 18.0.0(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@ngx-translate/http-loader':
+        specifier: ^18.0.0
+        version: 18.0.0(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(@ngx-translate/core@18.0.0(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))
       date-fns:
         specifier: ^4.4.0
         version: 4.4.0
@@ -1458,6 +1464,20 @@ packages:
     peerDependenciesMeta:
       '@nestjs/platform-socket.io':
         optional: true
+
+  '@ngx-translate/core@18.0.0':
+    resolution: {integrity: sha512-Z9u9AXaeuyeHHimivvJQvhal/LJNB+5tlH+FimSU4QQ61FrtRDqgyn6nfFbc6Cb+59NDZdsh4QeTJyPCldFUwA==}
+    peerDependencies:
+      '@angular/common': '>=18'
+      '@angular/core': '>=18'
+      rxjs: '>=7'
+
+  '@ngx-translate/http-loader@18.0.0':
+    resolution: {integrity: sha512-p6QpNcU3rkCYjHbKVIadcYtml/Njpr0aLp8neJ4uJWQ4Xm9f09bIePhOjdjAFHupTptKqKrG1J2gSi3RSwgYeA==}
+    peerDependencies:
+      '@angular/common': '>=18'
+      '@angular/core': '>=18'
+      '@ngx-translate/core': '>=18.0.0'
 
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
@@ -5618,6 +5638,20 @@ snapshots:
       tslib: 2.8.1
     optionalDependencies:
       '@nestjs/platform-socket.io': 12.1.2(@nestjs/common@12.1.2(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/websockets@12.1.2)(rxjs@7.8.2)
+
+  '@ngx-translate/core@18.0.0(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2)':
+    dependencies:
+      '@angular/common': 21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@angular/core': 21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2)
+      rxjs: 7.8.2
+      tslib: 2.8.1
+
+  '@ngx-translate/http-loader@18.0.0(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(@ngx-translate/core@18.0.0(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))':
+    dependencies:
+      '@angular/common': 21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@angular/core': 21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2)
+      '@ngx-translate/core': 18.0.0(@angular/common@21.2.25(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.25(@angular/compiler@21.2.25)(rxjs@7.8.2))(rxjs@7.8.2)
+      tslib: 2.8.1
 
   '@noble/hashes@1.8.0': {}
 

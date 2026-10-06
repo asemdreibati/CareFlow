@@ -223,3 +223,6 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .markdown ul { margin: 4px 0 8px; padding-left: 20px; }
 .markdown p { margin: 0 0 8px; }
 .markdown li { margin: 2px 0; }
+
+/* Arabic: Noto Sans Arabic first so Arabic glyphs render consistently; Inter covers Latin. */
+:root[lang='ar'] body { font-family: 'Noto Sans Arabic', 'Inter', system-ui, sans-serif; }

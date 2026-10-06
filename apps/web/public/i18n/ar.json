@@ -1,0 +1,15 @@
+{
+  "app": { "name": "كيرفلو", "language": "اللغة", "arabic": "العربية", "english": "English" },
+  "nav": {
+    "dashboard": "لوحة التحكم", "calendar": "التقويم", "patients": "المرضى", "doctors": "الأطباء", "billing": "الفوترة",
+    "scheduling": "الجدولة", "waitlist": "قائمة الانتظار", "resources": "الموارد", "proposals": "مقترحات إعادة الجدولة",
+    "administration": "الإدارة", "members": "الأعضاء", "audit": "سجل التدقيق", "settings": "الإعدادات", "messages": "الرسائل"
+  },
+  "common": {
+    "save": "حفظ", "cancel": "إلغاء", "close": "إغلاق", "delete": "حذف", "edit": "تعديل", "create": "إنشاء", "search": "بحث",
+    "loading": "جارٍ التحميل…", "noResults": "لا توجد نتائج", "confirm": "تأكيد", "back": "رجوع", "next": "التالي", "previous": "السابق",
+    "yes": "نعم", "no": "لا", "actions": "إجراءات", "status": "الحالة", "date": "التاريخ", "time": "الوقت", "name": "الاسم", "phone": "الهاتف",
+    "email": "البريد الإلكتروني", "notes": "ملاحظات", "total": "الإجمالي", "all": "الكل", "none": "لا شيء", "optional": "اختياري", "required": "مطلوب",
+    "page": "صفحة {{page}} من {{pages}}", "error": "حدث خطأ ما", "saved": "تم الحفظ", "logout": "تسجيل الخروج"
+  }
+}

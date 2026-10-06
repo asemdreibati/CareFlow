@@ -1,0 +1,15 @@
+{
+  "app": { "name": "CareFlow", "language": "Language", "arabic": "العربية", "english": "English" },
+  "nav": {
+    "dashboard": "Dashboard", "calendar": "Calendar", "patients": "Patients", "doctors": "Doctors", "billing": "Billing",
+    "scheduling": "Scheduling", "waitlist": "Waitlist", "resources": "Resources", "proposals": "Proposals",
+    "administration": "Administration", "members": "Members", "audit": "Audit", "settings": "Settings", "messages": "Messages"
+  },
+  "common": {
+    "save": "Save", "cancel": "Cancel", "close": "Close", "delete": "Delete", "edit": "Edit", "create": "Create", "search": "Search",
+    "loading": "Loading…", "noResults": "No results", "confirm": "Confirm", "back": "Back", "next": "Next", "previous": "Previous",
+    "yes": "Yes", "no": "No", "actions": "Actions", "status": "Status", "date": "Date", "time": "Time", "name": "Name", "phone": "Phone",
+    "email": "Email", "notes": "Notes", "total": "Total", "all": "All", "none": "None", "optional": "optional", "required": "required",
+    "page": "Page {{page}} of {{pages}}", "error": "Something went wrong", "saved": "Saved", "logout": "Log out"
+  }
+}
