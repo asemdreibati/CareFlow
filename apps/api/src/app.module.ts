@@ -17,8 +17,10 @@ import { BillingModule } from './modules/billing/billing.module.js';
 import { ClinicsModule } from './modules/clinics/clinics.module.js';
 import { DoctorsModule } from './modules/doctors/doctors.module.js';
 import { MembersModule } from './modules/members/members.module.js';
+import { MessagingModule } from './modules/messaging/messaging.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { PatientsModule } from './modules/patients/patients.module.js';
+import { PortalModule } from './modules/portal/portal.module.js';
 import { RecordsModule } from './modules/records/records.module.js';
 import { ResourcesModule } from './modules/resources/resources.module.js';
 import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
@@ -50,6 +52,8 @@ import { WaitlistModule } from './modules/waitlist/waitlist.module.js';
     SeriesModule,
     SchedulingModule,
     SearchModule,
+    MessagingModule,
+    PortalModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

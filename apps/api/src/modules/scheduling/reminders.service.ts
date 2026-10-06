@@ -5,7 +5,9 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { tenantContext } from '../../common/tenancy/tenant-context.js';
 import type { AppointmentEvent } from '../appointments/appointments.service.js';
-import { EmailSender } from '../notifications/email.sender.js';
+import { MessagingService } from '../messaging/messaging.service.js';
+import { formatWhen, resolveLocale } from '../messaging/messaging.templates.js';
+import { reminderChannelsFor, reminderPlanFor } from '../messaging/reminder-channels.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { errorMessage, inClinic, MOVABLE_STATUSES } from './scheduling.common.js';
 
@@ -13,12 +15,6 @@ const HOUR = 3_600_000;
 export const REMINDER_MAX_ATTEMPTS = 3;
 export const REMINDER_BATCH = 100;
 const LIST_LIMIT = 200;
-/** Reminder schedule: channel and hours before the appointment. */
-const REMINDER_PLAN: readonly { channel: ReminderChannel; hoursBefore: number }[] = [
-  { channel: 'IN_APP', hoursBefore: 24 },
-  { channel: 'IN_APP', hoursBefore: 2 },
-  { channel: 'EMAIL', hoursBefore: 24 },
-];
 
 /** A delivery problem that will not go away by retrying (no address, appointment gone). */
 class PermanentReminderError extends Error {}
@@ -39,7 +35,7 @@ export class RemindersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
-    private readonly email: EmailSender,
+    private readonly messaging: MessagingService,
   ) {}
 
   // ─────────────────────────────── outbox maintenance (listeners) ───────────────────────────────
@@ -51,14 +47,15 @@ export class RemindersService {
    * passed is not created (sending "24h before" after the fact is noise). Pending
    * rows that no longer match (moved appointment, finished status) are cancelled;
    * previously cancelled rows for a slot that is wanted again are revived.
+   * Channels come from `clinic.settings.reminderChannels`, defaulting to in-app +
+   * SMS when the patient has a phone and in-app + email otherwise.
    */
   async syncForAppointment(e: AppointmentEvent, now = new Date()): Promise<void> {
     const startsAt = new Date(e.startsAt);
     const active = MOVABLE_STATUSES.includes(e.status) && startsAt.getTime() > now.getTime();
-    const wanted = active
-      ? REMINDER_PLAN.map((p) => ({ channel: p.channel, scheduledFor: new Date(startsAt.getTime() - p.hoursBefore * HOUR) })).filter((w) => w.scheduledFor.getTime() > now.getTime())
-      : [];
     await inClinic(e.clinicId, async () => {
+      const plan = active ? reminderPlanFor(await this.channelsFor(e.clinicId, e.patientId)) : [];
+      const wanted = plan.map((p) => ({ channel: p.channel, scheduledFor: new Date(startsAt.getTime() - p.hoursBefore * HOUR) })).filter((w) => w.scheduledFor.getTime() > now.getTime());
       await this.prisma.db.reminder.updateMany({
         where: { clinicId: e.clinicId, appointmentId: e.id, status: 'PENDING', NOT: wanted.map((w) => ({ channel: w.channel, scheduledFor: w.scheduledFor })) },
         data: { status: 'CANCELLED' },
@@ -77,6 +74,15 @@ export class RemindersService {
         });
       }
     });
+  }
+
+  /** Channel selection: clinic setting, else by whether the patient has a phone. */
+  private async channelsFor(clinicId: string, patientId: string): Promise<ReminderChannel[]> {
+    const [clinic, patient] = await Promise.all([
+      this.prisma.db.clinic.findUnique({ where: { id: clinicId }, select: { settings: true } }),
+      this.prisma.db.patient.findFirst({ where: { id: patientId, clinicId }, select: { phone: true } }),
+    ]);
+    return reminderChannelsFor(clinic?.settings, !!patient?.phone);
   }
 
   async cancelForAppointment(e: AppointmentEvent): Promise<void> {
@@ -179,8 +185,8 @@ export class RemindersService {
       where: { id: row.appointmentId, clinicId },
       include: {
         doctor: { select: { id: true, userId: true, firstName: true, lastName: true } },
-        patient: { select: { id: true, firstName: true, lastName: true, email: true } },
-        clinic: { select: { name: true, timezone: true } },
+        patient: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, locale: true } },
+        clinic: { select: { name: true, timezone: true, settings: true } },
       },
     });
     if (!appt) throw new PermanentReminderError('Appointment no longer exists');
@@ -204,13 +210,27 @@ export class RemindersService {
         });
         return 'sent';
       }
-      case 'EMAIL': {
-        if (!appt.patient.email) throw new PermanentReminderError('Patient has no email address');
-        await this.email.send(
-          appt.patient.email,
-          `Appointment reminder - ${appt.clinic.name}`,
-          `Dear ${patientName},\n\nThis is a reminder of your appointment with ${doctorName} on ${when}.\n\n${appt.clinic.name}`,
-        );
+      case 'EMAIL':
+      case 'SMS':
+      case 'WHATSAPP': {
+        const to = row.channel === 'EMAIL' ? appt.patient.email : appt.patient.phone;
+        if (!to) throw new PermanentReminderError(row.channel === 'EMAIL' ? 'Patient has no email address' : 'Patient has no phone number');
+        const locale = resolveLocale(appt.patient.locale, resolveLocale((appt.clinic.settings as { defaultLocale?: string } | null)?.defaultLocale));
+        const message = await this.messaging.send({
+          clinicId,
+          patientId: appt.patient.id,
+          appointmentId: appt.id,
+          channel: row.channel,
+          to,
+          template: 'appointment.reminder',
+          locale,
+          params: { patientName, doctorName, when: formatWhen(appt.startsAt, appt.clinic.timezone || 'UTC', locale), clinicName: appt.clinic.name },
+        });
+        if (message.status === 'FAILED') {
+          // An unusable address will not fix itself; provider errors are retried.
+          if (message.error?.startsWith('Invalid ')) throw new PermanentReminderError(message.error);
+          throw new Error(message.error ?? `${row.channel} delivery failed`);
+        }
         return 'sent';
       }
       default:

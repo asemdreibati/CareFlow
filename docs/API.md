@@ -100,3 +100,19 @@ GET `/search/diagnoses?q` → `[{code, description, uses}]`; GET `/records/searc
 → paginated encounters with `rank` and `snippet`. `GET /patients?search=` is trigram-based and Arabic-aware
 (`careflow_normalize`). AI: POST `/ai/patients/:id/ask {question}` → `{answer, citations[], interactionId, retrieval}`;
 POST `/ai/embeddings/backfill` → `{scanned, embedded, unchanged, failed}`.
+
+## Patient portal (`/portal`) — implemented (phase 3)
+Public, throttled: POST `/portal/auth/request-otp {clinicSlug, phone}` → `{sent:true}` (never reveals whether the phone exists);
+POST `/portal/auth/verify {clinicSlug, phone, code}` → `{accessToken, expiresIn, patient, clinic}` (JWT type `patient`; rejected on staff routes).
+With the patient token: GET/PATCH `/portal/me`, GET `/portal/clinic`, GET `/portal/appointments?scope=upcoming|past`,
+GET `/portal/appointments/:id`, GET `/portal/slots?doctorId|specialty&durationMinutes&from&to`, POST `/portal/appointments {doctorId, startsAt, reason?}`
+(idempotent via `Idempotency-Key`), POST `/portal/appointments/:id/confirm|cancel` (cancel < 2h before start → 409),
+GET `/portal/invoices[/:id]`, GET/POST `/portal/waitlist`, POST `/portal/waitlist/:id/accept|decline`, GET/POST `/portal/consents {type, version}`.
+Staff enable access per patient with `PATCH /patients/:id {portalEnabled: true, locale}`.
+
+## Messaging (`/messages`, `/webhooks/twilio/*`) — implemented (phase 3)
+GET `/messages?patientId&appointmentId&channel&direction&page` (patients:read), POST `/messages {patientId, channel, body, subject?, appointmentId?}` (patients:write).
+Providers from env: SMS/WhatsApp via Twilio REST, email via SMTP, or `log` for development. Reminder channels per clinic
+(`clinic.settings.reminderChannels`, default IN_APP + SMS when a phone exists). Inbound replies: POST `/webhooks/twilio/inbound`
+(signature-validated) parses `1/نعم/yes` → CONFIRMED and `2/لا/no` → CANCELLED on the patient's next appointment and answers with TwiML;
+POST `/webhooks/twilio/status` records delivery status.
