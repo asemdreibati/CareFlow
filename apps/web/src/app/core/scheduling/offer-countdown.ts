@@ -13,16 +13,19 @@ export function offerCountdown(expiresAt: string | Date | null | undefined, now:
   return { ms, expired: false, label: formatRemaining(ms), urgent: ms < 60 * 60 * 1000 };
 }
 
-/** "1d 2h", "3h 05m", "12m 30s", "45s". */
-export function formatRemaining(ms: number): string {
+export interface DurationUnits { d: string; h: string; m: string; s: string; }
+const EN_UNITS: DurationUnits = { d: 'd', h: 'h', m: 'm', s: 's' };
+
+/** "1d 2h", "3h 05m", "12m 30s", "45s" (unit suffixes are overridable for other languages). */
+export function formatRemaining(ms: number, units: DurationUnits = EN_UNITS): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   const d = Math.floor(total / 86400);
   const h = Math.floor((total % 86400) / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   const two = (v: number) => String(v).padStart(2, '0');
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${two(m)}m`;
-  if (m > 0) return `${m}m ${two(s)}s`;
-  return `${s}s`;
+  if (d > 0) return `${d}${units.d} ${h}${units.h}`;
+  if (h > 0) return `${h}${units.h} ${two(m)}${units.m}`;
+  if (m > 0) return `${m}${units.m} ${two(s)}${units.s}`;
+  return `${s}${units.s}`;
 }

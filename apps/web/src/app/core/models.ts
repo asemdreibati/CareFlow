@@ -22,7 +22,7 @@ export interface Tokens {
   refreshToken: string;
   expiresIn: string;
 }
-export interface SessionUser { id: string; email: string; firstName: string; lastName: string; }
+export interface SessionUser { id: string; email: string; firstName: string; lastName: string; locale?: 'ar' | 'en' | null; }
 export interface SessionClinic { id: string; name: string; slug: string; timezone: string; currency: string; }
 export interface ClinicSummary { id: string; name: string; slug: string; role: Role; }
 export interface Session {

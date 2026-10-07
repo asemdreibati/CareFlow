@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 
-export interface ConfirmOptions { title: string; message: string; confirmText?: string; danger?: boolean; }
+export interface ConfirmOptions { title: string; message: string; confirmText?: string; cancelText?: string; danger?: boolean; }
 interface Pending extends ConfirmOptions { resolve: (v: boolean) => void; }
 
 @Injectable({ providedIn: 'root' })

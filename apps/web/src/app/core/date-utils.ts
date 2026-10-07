@@ -1,10 +1,15 @@
 import { addDays, addMinutes, differenceInYears, format, isSameDay, parseISO, startOfDay, startOfWeek } from 'date-fns';
+import { activeDateFnsLocale } from './i18n/locale-registry';
 
 export const toDate = (v: string | Date): Date => (typeof v === 'string' ? parseISO(v) : v);
 
+/**
+ * date-fns formatting in the active UI language (month/weekday names). Prefer
+ * `LanguageService.formatDate/…` in components; this stays for pattern-based needs.
+ */
 export function fmtDate(v?: string | Date | null, pattern = 'dd MMM yyyy'): string {
   if (!v) return '—';
-  try { return format(toDate(v), pattern); } catch { return String(v); }
+  try { return format(toDate(v), pattern, { locale: activeDateFnsLocale() }); } catch { return String(v); }
 }
 export const fmtDateTime = (v?: string | Date | null) => fmtDate(v, 'dd MMM yyyy, HH:mm');
 export const fmtTime = (v?: string | Date | null) => fmtDate(v, 'HH:mm');
@@ -12,9 +17,14 @@ export const isoDate = (d: Date) => format(d, 'yyyy-MM-dd');
 /** Local YYYY-MM-DDTHH:mm for <input type="datetime-local"> */
 export const toLocalInput = (v?: string | Date | null) => (v ? format(toDate(v), "yyyy-MM-dd'T'HH:mm") : '');
 
+/** Whole years since `dob`, or null when unknown/invalid. */
+export function ageYears(dob?: string | null): number | null {
+  if (!dob) return null;
+  try { const n = differenceInYears(new Date(), parseISO(dob)); return Number.isNaN(n) ? null : n; } catch { return null; }
+}
 export function age(dob?: string | null): string {
-  if (!dob) return '—';
-  try { return `${differenceInYears(new Date(), parseISO(dob))} y`; } catch { return '—'; }
+  const n = ageYears(dob);
+  return n === null ? '—' : `${n} y`;
 }
 
 /** [start, end) of the local day as ISO strings. */

@@ -1,10 +1,10 @@
 <div class="page">
   @if (doctor(); as d) {
-    <cf-page-header [title]="(d.title || '') + ' ' + d.firstName + ' ' + d.lastName" [subtitle]="d.specialty + (d.licenseNumber ? ' · License ' + d.licenseNumber : '')">
+    <cf-page-header [title]="(d.title || '') + ' ' + d.firstName + ' ' + d.lastName" [subtitle]="d.specialty + (d.licenseNumber ? ' · ' + ('doctors.license' | translate) + ' ' + d.licenseNumber : '')">
       <cf-chip [status]="d.isActive" />
       @if (canWrite) {
-        @if (d.isActive) { <button type="button" class="btn danger-outline" (click)="deactivate()">Deactivate</button> }
-        <a class="btn primary" [routerLink]="['/doctors', d.id, 'edit']">Edit</a>
+        @if (d.isActive) { <button type="button" class="btn danger-outline" (click)="deactivate()">{{ 'doctors.deactivate' | translate }}</button> }
+        <a class="btn primary" [routerLink]="['/doctors', d.id, 'edit']">{{ 'common.edit' | translate }}</a>
       }
     </cf-page-header>
 
@@ -12,29 +12,29 @@
       <div class="col">
         <div class="card">
           <div class="card-header">
-            <h3>Weekly availability</h3>
-            @if (canWrite) { <button type="button" class="btn sm primary" (click)="saveAvailability()" [disabled]="!dirty() || saving()">{{ saving() ? 'Saving…' : 'Save availability' }}</button> }
+            <h3>{{ 'doctors.weeklyAvailability' | translate }}</h3>
+            @if (canWrite) { <button type="button" class="btn sm primary" (click)="saveAvailability()" [disabled]="!dirty() || saving()">{{ (saving() ? 'common.saving' : 'doctors.saveAvailability') | translate }}</button> }
           </div>
           <div class="card-body">
             @for (day of dayOrder; track day) {
               <div class="day">
-                <div class="name">{{ weekdays[day] }}</div>
+                <div class="name">{{ weekdays()[day] }}</div>
                 <div>
                   @for (s of slotsFor(day); track $index) {
                     <div class="slot">
-                      <select class="input sm" [(ngModel)]="s.startTime" (ngModelChange)="touch()" [disabled]="!canWrite">@for (t of times; track t) { <option [value]="t">{{ t }}</option> }</select>
-                      <span class="muted">to</span>
-                      <select class="input sm" [(ngModel)]="s.endTime" (ngModelChange)="touch()" [disabled]="!canWrite">@for (t of times; track t) { <option [value]="t">{{ t }}</option> }</select>
-                      <span class="muted">slot</span>
-                      <input class="input sm" type="number" min="5" max="240" step="5" style="width: 72px" [(ngModel)]="s.slotMinutes" (ngModelChange)="touch()" [disabled]="!canWrite" />
-                      <span class="muted">min</span>
-                      @if (canWrite) { <button type="button" class="btn ghost xs danger-text" (click)="removeSlot(s)">✕</button> }
+                      <select class="input sm" [(ngModel)]="s.startTime" (ngModelChange)="touch()" [disabled]="!canWrite" [attr.aria-label]="'common.from' | translate">@for (t of times; track t) { <option [value]="t">{{ t }}</option> }</select>
+                      <span class="muted">{{ 'common.to' | translate }}</span>
+                      <select class="input sm" [(ngModel)]="s.endTime" (ngModelChange)="touch()" [disabled]="!canWrite" [attr.aria-label]="'common.to' | translate">@for (t of times; track t) { <option [value]="t">{{ t }}</option> }</select>
+                      <span class="muted">{{ 'doctors.slot' | translate }}</span>
+                      <input class="input sm" type="number" min="5" max="240" step="5" style="width: 72px" [(ngModel)]="s.slotMinutes" (ngModelChange)="touch()" [disabled]="!canWrite" [attr.aria-label]="'doctors.slotMinutes' | translate" />
+                      <span class="muted">{{ 'common.units.min' | translate }}</span>
+                      @if (canWrite) { <button type="button" class="btn ghost xs danger-text" (click)="removeSlot(s)" [attr.aria-label]="'common.remove' | translate">✕</button> }
                     </div>
-                  } @empty { <div class="muted" style="padding-top: 6px">Not available</div> }
+                  } @empty { <div class="muted" style="padding-top: 6px">{{ 'doctors.notAvailable' | translate }}</div> }
                   @if (canWrite) {
                     <div class="row gap-1">
-                      <button type="button" class="btn ghost xs" (click)="addSlot(day)">+ Add window</button>
-                      @if (slotsFor(day).length && day !== 5 && day !== 6) { <button type="button" class="btn ghost xs" (click)="copyToWeekdays(day)">Copy to Sun–Thu</button> }
+                      <button type="button" class="btn ghost xs" (click)="addSlot(day)">+ {{ 'windows.add' | translate }}</button>
+                      @if (slotsFor(day).length && day !== 5 && day !== 6) { <button type="button" class="btn ghost xs" (click)="copyToWeekdays(day)">{{ 'doctors.copyToWeekdays' | translate: { from: weekdays()[0], to: weekdays()[4] } }}</button> }
                     </div>
                   }
                 </div>
@@ -45,38 +45,38 @@
       </div>
       <div class="col">
         <div class="card">
-          <div class="card-header"><h3>Profile</h3></div>
+          <div class="card-header"><h3>{{ 'doctors.profile' | translate }}</h3></div>
           <div class="card-body">
             <dl class="kv" style="grid-template-columns: 90px 1fr">
-              <dt>Color</dt><dd><span class="pill-color" [style.background]="d.color || '#94a3b8'"></span> {{ d.color }}</dd>
-              <dt>Phone</dt><dd>{{ d.phone || '—' }}</dd>
-              <dt>Email</dt><dd>{{ d.email || '—' }}</dd>
-              <dt>Login</dt><dd>{{ d.userId ? 'Linked member' : 'Not linked' }}</dd>
-              <dt>Bio</dt><dd>{{ d.bio || '—' }}</dd>
+              <dt>{{ 'doctors.color' | translate }}</dt><dd><span class="pill-color" [style.background]="d.color || '#94a3b8'"></span> <span dir="ltr">{{ d.color }}</span></dd>
+              <dt>{{ 'common.phone' | translate }}</dt><dd dir="ltr" class="text-start">{{ d.phone || '—' }}</dd>
+              <dt>{{ 'common.email' | translate }}</dt><dd dir="ltr" class="text-start">{{ d.email || '—' }}</dd>
+              <dt>{{ 'doctors.login' | translate }}</dt><dd>{{ (d.userId ? 'doctors.linkedMemberShort' : 'doctors.notLinked') | translate }}</dd>
+              <dt>{{ 'doctors.bio' | translate }}</dt><dd>{{ d.bio || '—' }}</dd>
             </dl>
           </div>
         </div>
         <div class="card">
-          <div class="card-header"><h3>Time off</h3>
-            <a *hasPermission="'scheduling:manage'" class="btn xs" routerLink="/scheduling/proposals" [queryParams]="{ new: 1, doctorId: d.id }" title="Preview affected appointments and move them automatically">Plan time off with rescheduling</a>
+          <div class="card-header"><h3>{{ 'doctors.timeOff' | translate }}</h3>
+            <a *hasPermission="'scheduling:manage'" class="btn xs" routerLink="/scheduling/proposals" [queryParams]="{ new: 1, doctorId: d.id }" [title]="'doctors.planTimeOffHint' | translate">{{ 'doctors.planTimeOff' | translate }}</a>
           </div>
           <div class="card-body">
             @for (t of d.timeOff ?? []; track t.id) {
               <div class="list-item">
-                <div class="flex-1"><div>{{ fmt(t.startsAt) }} → {{ fmt(t.endsAt) }}</div>@if (t.reason) { <div class="subtle">{{ t.reason }}</div> }</div>
-                @if (canWrite) { <button type="button" class="btn ghost xs danger-text" (click)="removeTimeOff(t.id)">Remove</button> }
+                <div class="flex-1"><div>{{ lang.formatDateTime(t.startsAt) }} <span class="mirror">→</span> {{ lang.formatDateTime(t.endsAt) }}</div>@if (t.reason) { <div class="subtle">{{ t.reason }}</div> }</div>
+                @if (canWrite) { <button type="button" class="btn ghost xs danger-text" (click)="removeTimeOff(t.id)">{{ 'common.remove' | translate }}</button> }
               </div>
-            } @empty { <div class="muted">No time off scheduled.</div> }
+            } @empty { <div class="muted">{{ 'doctors.noTimeOff' | translate }}</div> }
             @if (canWrite) {
               <div class="divider"></div>
-              <div class="field"><label>From</label><input class="input sm" type="datetime-local" [(ngModel)]="timeOff.startsAt" /></div>
-              <div class="field"><label>To</label><input class="input sm" type="datetime-local" [(ngModel)]="timeOff.endsAt" /></div>
-              <div class="field"><label>Reason</label><input class="input sm" [(ngModel)]="timeOff.reason" placeholder="Vacation, conference…" /></div>
-              <button type="button" class="btn sm" (click)="addTimeOff()" [disabled]="addingTimeOff() || !timeOff.startsAt || !timeOff.endsAt">Add time off</button>
+              <div class="field"><label>{{ 'common.from' | translate }}</label><input class="input sm" type="datetime-local" [(ngModel)]="timeOff.startsAt" /></div>
+              <div class="field"><label>{{ 'common.to' | translate }}</label><input class="input sm" type="datetime-local" [(ngModel)]="timeOff.endsAt" /></div>
+              <div class="field"><label>{{ 'common.reason' | translate }}</label><input class="input sm" [(ngModel)]="timeOff.reason" [placeholder]="'doctors.timeOffReasonPlaceholder' | translate" /></div>
+              <button type="button" class="btn sm" (click)="addTimeOff()" [disabled]="addingTimeOff() || !timeOff.startsAt || !timeOff.endsAt">{{ 'doctors.addTimeOff' | translate }}</button>
             }
           </div>
         </div>
       </div>
     </div>
-  } @else { <div class="loading"><span class="spinner"></span> Loading…</div> }
+  } @else { <div class="loading"><span class="spinner"></span> {{ 'common.loading' | translate }}</div> }
 </div>

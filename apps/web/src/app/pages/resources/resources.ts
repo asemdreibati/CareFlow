@@ -1,12 +1,14 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
 import { addDays, startOfDay } from 'date-fns';
 import { ResourcesApi } from '../../core/api/resources.api';
 import { AuthService } from '../../core/auth.service';
-import { ToastService, errorMessage } from '../../core/toast.service';
+import { ToastService } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { Resource, ResourceBooking } from '../../core/models';
-import { dayRange, fmtDate, fmtTime, isoDate, renderSlots, SlotView } from '../../core/date-utils';
+import { dayRange, isoDate, renderSlots, SlotView } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { StatusChipComponent } from '../../shared/status-chip';
 import { HasPermissionDirective } from '../../core/permission.directive';
@@ -15,36 +17,36 @@ import { ResourceSelectComponent } from '../../shared/resource-select';
 
 @Component({
   selector: 'cf-resources',
-  imports: [FormsModule, RouterLink, PageHeaderComponent, StatusChipComponent, HasPermissionDirective, ResourceDialogComponent, ResourceSelectComponent],
+  imports: [FormsModule, RouterLink, TranslatePipe, PageHeaderComponent, StatusChipComponent, HasPermissionDirective, ResourceDialogComponent, ResourceSelectComponent],
   template: `
     <div class="page">
-      <cf-page-header title="Resources" subtitle="Rooms, equipment and other bookable resources">
-        <label class="checkbox small"><input type="checkbox" [ngModel]="includeInactive()" (ngModelChange)="includeInactive.set($event); load()" /> Show inactive</label>
-        <button *hasPermission="'resources:write'" type="button" class="btn primary" (click)="editing.set(null); dialog.set(true)">+ New resource</button>
+      <cf-page-header [title]="'resources.title' | translate" [subtitle]="'resources.subtitle' | translate">
+        <label class="checkbox small"><input type="checkbox" [ngModel]="includeInactive()" (ngModelChange)="includeInactive.set($event); load()" /> {{ 'common.showInactive' | translate }}</label>
+        <button *hasPermission="'resources:write'" type="button" class="btn primary" (click)="editing.set(null); dialog.set(true)">+ {{ 'resources.new' | translate }}</button>
       </cf-page-header>
 
       <div class="grid layout">
         <div class="col">
           <div class="card">
-            <div class="card-header"><h3>Catalogue</h3>@if (loading()) { <span class="spinner"></span> }</div>
+            <div class="card-header"><h3>{{ 'resources.catalogue' | translate }}</h3>@if (loading()) { <span class="spinner"></span> }</div>
             @if (error()) { <div class="empty">{{ error() }}</div> }
             @else {
               <div class="table-wrap">
                 <table class="table">
-                  <thead><tr><th>Name</th><th>Type</th><th>Notes</th><th>Status</th><th></th></tr></thead>
+                  <thead><tr><th>{{ 'common.name' | translate }}</th><th>{{ 'common.type' | translate }}</th><th>{{ 'common.notes' | translate }}</th><th>{{ 'common.status' | translate }}</th><th></th></tr></thead>
                   <tbody>
                     @for (r of resources(); track r.id) {
                       <tr class="clickable" [class.sel]="selected()?.id === r.id" (click)="select(r)">
                         <td><span class="row gap-1"><span class="pill-color" [style.background]="r.color || '#6b7280'"></span><strong>{{ r.name }}</strong></span></td>
-                        <td><cf-chip [status]="r.type" /></td>
+                        <td><cf-chip [status]="r.type" group="resourceType" /></td>
                         <td class="muted truncate" style="max-width: 260px">{{ r.notes || '—' }}</td>
                         <td><cf-chip [status]="r.isActive" /></td>
                         <td class="actions">
-                          <button *hasPermission="'resources:write'" type="button" class="btn xs" (click)="edit(r, $event)">Edit</button>
-                          <button type="button" class="btn xs ghost" (click)="select(r)">Day view</button>
+                          <button *hasPermission="'resources:write'" type="button" class="btn xs" (click)="edit(r, $event)">{{ 'common.edit' | translate }}</button>
+                          <button type="button" class="btn xs ghost" (click)="select(r)">{{ 'resources.dayView' | translate }}</button>
                         </td>
                       </tr>
-                    } @empty { <tr><td colspan="5" class="empty">No resources yet.@if (canWrite) { Create rooms or equipment to book them with appointments. }</td></tr> }
+                    } @empty { <tr><td colspan="5" class="empty">{{ 'resources.none' | translate }}@if (canWrite) { {{ 'resources.noneHint' | translate }} }</td></tr> }
                   </tbody>
                 </table>
               </div>
@@ -54,29 +56,29 @@ import { ResourceSelectComponent } from '../../shared/resource-select';
           @if (selected(); as r) {
             <div class="card">
               <div class="card-header">
-                <h3><span class="pill-color" [style.background]="r.color || '#6b7280'"></span> {{ r.name }} — day view</h3>
+                <h3><span class="pill-color" [style.background]="r.color || '#6b7280'"></span> {{ r.name }} — {{ 'resources.dayView' | translate }}</h3>
                 <div class="row gap-1">
-                  <button type="button" class="btn sm" (click)="shiftDay(-1)">‹</button>
+                  <button type="button" class="btn sm" (click)="shiftDay(-1)" [attr.aria-label]="'common.previous' | translate">‹</button>
                   <input class="input sm" type="date" style="width: 150px" [ngModel]="day()" (ngModelChange)="day.set($event); loadBookings()" />
-                  <button type="button" class="btn sm" (click)="shiftDay(1)">›</button>
+                  <button type="button" class="btn sm" (click)="shiftDay(1)" [attr.aria-label]="'common.next' | translate">›</button>
                 </div>
               </div>
-              @if (bookingsLoading()) { <div class="loading"><span class="spinner"></span> Loading…</div> }
+              @if (bookingsLoading()) { <div class="loading"><span class="spinner"></span> {{ 'common.loading' | translate }}</div> }
               @else if (bookingsError()) { <div class="empty">{{ bookingsError() }}</div> }
               @else {
                 <div class="table-wrap">
                   <table class="table">
-                    <thead><tr><th>Time</th><th>Patient</th><th>Doctor</th><th>Status</th><th></th></tr></thead>
+                    <thead><tr><th>{{ 'common.time' | translate }}</th><th>{{ 'common.patient' | translate }}</th><th>{{ 'common.doctor' | translate }}</th><th>{{ 'common.status' | translate }}</th><th></th></tr></thead>
                     <tbody>
                       @for (b of bookings(); track b.id) {
                         <tr [class.inactive]="!b.active">
-                          <td class="nowrap mono">{{ fmtTime(b.startsAt) }}–{{ fmtTime(b.endsAt) }}</td>
+                          <td class="nowrap mono">{{ lang.formatTimeRange(b.startsAt, b.endsAt) }}</td>
                           <td>@if (b.appointment?.patient; as p) { <a [routerLink]="['/patients', p.id]">{{ p.firstName }} {{ p.lastName }}</a> } @else { <span class="muted">—</span> }</td>
                           <td>@if (b.appointment?.doctor; as d) { <span class="row gap-1"><span class="pill-color" [style.background]="d.color || '#94a3b8'"></span>{{ d.firstName }} {{ d.lastName }}</span> } @else { <span class="muted">—</span> }</td>
-                          <td>@if (b.appointment?.status) { <cf-chip [status]="b.appointment!.status" /> } @else { <cf-chip [status]="b.active ? 'ACTIVE' : 'CANCELLED'" /> }</td>
-                          <td class="actions"><a class="btn xs ghost" [routerLink]="['/appointments', b.appointmentId]">Open</a></td>
+                          <td>@if (b.appointment?.status) { <cf-chip [status]="b.appointment!.status" group="status" /> } @else { <cf-chip [status]="b.active ? 'ACTIVE' : 'CANCELLED'" group="status" /> }</td>
+                          <td class="actions"><a class="btn xs ghost" [routerLink]="['/appointments', b.appointmentId]">{{ 'common.open' | translate }}</a></td>
                         </tr>
-                      } @empty { <tr><td colspan="5" class="empty">No bookings on {{ fmtDate(day()) }}.</td></tr> }
+                      } @empty { <tr><td colspan="5" class="empty">{{ 'resources.noBookings' | translate: { date: lang.formatDate(day()) } }}</td></tr> }
                     </tbody>
                   </table>
                 </div>
@@ -87,24 +89,24 @@ import { ResourceSelectComponent } from '../../shared/resource-select';
 
         <div class="col">
           <div class="card">
-            <div class="card-header"><h3>Availability check</h3></div>
+            <div class="card-header"><h3>{{ 'resources.availabilityCheck' | translate }}</h3></div>
             <div class="card-body">
-              <p class="muted small">Pick resources, a date and a duration to see the slots when <em>all</em> of them are free.</p>
-              <div class="field"><label>Resources</label><cf-resource-select [selected]="checkIds()" (selectedChange)="checkIds.set($event)" /></div>
+              <p class="muted small">{{ 'resources.availabilityHint' | translate }}</p>
+              <div class="field"><label>{{ 'nav.resources' | translate }}</label><cf-resource-select [selected]="checkIds()" (selectedChange)="checkIds.set($event)" /></div>
               <div class="row gap-1">
-                <div class="field flex-1"><label>Date</label><input class="input sm" type="date" [ngModel]="checkDate()" (ngModelChange)="checkDate.set($event)" /></div>
-                <div class="field"><label>Duration</label>
+                <div class="field flex-1"><label>{{ 'common.date' | translate }}</label><input class="input sm" type="date" [ngModel]="checkDate()" (ngModelChange)="checkDate.set($event)" /></div>
+                <div class="field"><label>{{ 'common.duration' | translate }}</label>
                   <select class="input sm" [ngModel]="checkDuration()" (ngModelChange)="checkDuration.set(+$event)">
-                    @for (m of [15, 20, 30, 45, 60, 90]; track m) { <option [ngValue]="m">{{ m }} min</option> }
+                    @for (m of [15, 20, 30, 45, 60, 90]; track m) { <option [ngValue]="m">{{ lang.formatMinutes(m) }}</option> }
                   </select>
                 </div>
               </div>
-              <button type="button" class="btn block" (click)="check()" [disabled]="!checkIds().length || !checkDate() || checking()">{{ checking() ? 'Checking…' : 'Find common free slots' }}</button>
+              <button type="button" class="btn block" (click)="check()" [disabled]="!checkIds().length || !checkDate() || checking()">{{ (checking() ? 'resources.checking' : 'resources.findCommon') | translate }}</button>
               @if (checkError()) { <div class="inline-alert info mt-2">{{ checkError() }}</div> }
-              @else if (checked() && !freeSlots().length) { <div class="muted small mt-2">No common free slot on that day.</div> }
+              @else if (checked() && !freeSlots().length) { <div class="muted small mt-2">{{ 'resources.noCommonSlot' | translate }}</div> }
               @else if (freeSlots().length) {
                 <div class="slots mt-2">@for (s of freeSlots(); track s.startsAt) { <span class="chip green">{{ s.label }}</span> }</div>
-                <a *hasPermission="'appointments:write'" class="btn sm primary mt-2" routerLink="/calendar" [queryParams]="{ find: 1 }">Book via Find a slot</a>
+                <a *hasPermission="'appointments:write'" class="btn sm primary mt-2" routerLink="/calendar" [queryParams]="{ find: 1 }">{{ 'resources.bookViaFinder' | translate }}</a>
               }
             </div>
           </div>
@@ -126,8 +128,7 @@ export class ResourcesPage {
   private readonly api = inject(ResourcesApi);
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
-  readonly fmtTime = fmtTime;
-  readonly fmtDate = fmtDate;
+  readonly lang = inject(LanguageService);
   readonly canWrite = this.auth.hasPermission('resources:write');
   readonly resources = signal<Resource[]>([]);
   readonly loading = signal(true);
@@ -156,7 +157,7 @@ export class ResourcesPage {
     this.loading.set(true); this.error.set(null);
     this.api.list(this.includeInactive()).subscribe({
       next: (r) => { this.resources.set(r); this.loading.set(false); },
-      error: (err) => { this.loading.set(false); this.resources.set([]); this.error.set(errorMessage(err, 'Resources are not available yet.')); },
+      error: (err) => { this.loading.set(false); this.resources.set([]); this.error.set(this.lang.errorMessage(err, this.lang.t('resources.unavailableShort'))); },
     });
   }
   edit(r: Resource, e: Event) { e.stopPropagation(); this.editing.set(r); this.dialog.set(true); }
@@ -169,14 +170,14 @@ export class ResourcesPage {
     const { from, to } = dayRange(new Date(`${this.day()}T00:00:00`));
     this.api.bookings(r.id, { from, to }).subscribe({
       next: (b) => { this.bookings.set([...b].sort((x, y) => x.startsAt.localeCompare(y.startsAt))); this.bookingsLoading.set(false); },
-      error: (err) => { this.bookingsLoading.set(false); this.bookings.set([]); this.bookingsError.set(errorMessage(err, 'Bookings unavailable.')); },
+      error: (err) => { this.bookingsLoading.set(false); this.bookings.set([]); this.bookingsError.set(this.lang.errorMessage(err, this.lang.t('resources.bookingsUnavailable'))); },
     });
   }
   check() {
     this.checking.set(true); this.checkError.set(null); this.checked.set(false);
     this.api.availability({ resourceIds: this.checkIds(), date: this.checkDate(), durationMinutes: this.checkDuration() }).subscribe({
       next: (r) => { this.freeSlots.set(renderSlots(r?.slots ?? []).filter((s) => !s.disabled)); this.checking.set(false); this.checked.set(true); },
-      error: (err) => { this.checking.set(false); this.freeSlots.set([]); this.checkError.set(errorMessage(err, 'Availability check unavailable.')); this.toast.fromError(err); },
+      error: (err) => { this.checking.set(false); this.freeSlots.set([]); this.checkError.set(this.lang.errorMessage(err, this.lang.t('resources.checkUnavailable'))); this.toast.fromError(err); },
     });
   }
 }

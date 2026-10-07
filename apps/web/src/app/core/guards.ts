@@ -2,6 +2,7 @@ import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { AuthService } from './auth.service';
 import { ToastService } from './toast.service';
+import { LanguageService } from './i18n/language.service';
 
 export const authGuard: CanActivateFn = (_route, state) => {
   const auth = inject(AuthService);
@@ -22,8 +23,9 @@ export function permissionGuard(...perms: string[]): CanActivateFn {
     const auth = inject(AuthService);
     const router = inject(Router);
     const toast = inject(ToastService);
+    const lang = inject(LanguageService);
     if (auth.hasPermission(...perms)) return true;
-    toast.error('You do not have permission to open that page.');
+    toast.error(lang.t('errors.noPagePermission'));
     return router.createUrlTree(['/dashboard']);
   };
 }

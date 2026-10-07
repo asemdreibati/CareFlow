@@ -1,11 +1,10 @@
 import { Component, inject, input, output, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
 import { BillingApi } from '../../core/api/billing.api';
-import { AuthService } from '../../core/auth.service';
-import { errorMessage } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { INVOICE_STATUSES, Invoice, InvoiceStatus } from '../../core/models';
-import { fmtDate } from '../../core/date-utils';
-import { money, num } from '../../core/money';
+import { num } from '../../core/money';
 import { StatusChipComponent } from '../../shared/status-chip';
 import { PaginationComponent } from '../../shared/pagination';
 import { HasPermissionDirective } from '../../core/permission.directive';
@@ -13,37 +12,37 @@ import { CreateInvoiceDialog } from './create-invoice-dialog';
 
 @Component({
   selector: 'cf-invoices-tab',
-  imports: [RouterLink, StatusChipComponent, PaginationComponent, HasPermissionDirective, CreateInvoiceDialog],
+  imports: [RouterLink, TranslatePipe, StatusChipComponent, PaginationComponent, HasPermissionDirective, CreateInvoiceDialog],
   template: `
     <div class="card">
       <div class="card-header">
         <div class="row gap-1">
-          <select class="input sm" style="width: 170px" [value]="status()" (change)="onStatus($event)">
-            <option value="">All statuses</option>@for (s of statuses; track s) { <option [value]="s">{{ s.replace('_', ' ') }}</option> }
+          <select class="input sm" style="width: 170px" [value]="status()" (change)="onStatus($event)" [attr.aria-label]="'common.status' | translate">
+            <option value="">{{ 'common.allStatuses' | translate }}</option>@for (s of statuses; track s) { <option [value]="s">{{ lang.enumLabel(s, 'status') }}</option> }
           </select>
-          @if (patientId()) { <span class="chip teal">Filtered by patient <button type="button" class="btn ghost xs" (click)="clearPatient()">✕</button></span> }
+          @if (patientId()) { <span class="chip teal">{{ 'billing.filteredByPatient' | translate }} <button type="button" class="btn ghost xs" (click)="clearPatient()" [attr.aria-label]="'common.clear' | translate">✕</button></span> }
         </div>
-        <button *hasPermission="'billing:write'" type="button" class="btn sm primary" (click)="dialog.set(true)">+ New invoice</button>
+        <button *hasPermission="'billing:write'" type="button" class="btn sm primary" (click)="dialog.set(true)">+ {{ 'billing.newInvoice' | translate }}</button>
       </div>
-      @if (loading()) { <div class="loading"><span class="spinner"></span> Loading…</div> }
+      @if (loading()) { <div class="loading"><span class="spinner"></span> {{ 'common.loading' | translate }}</div> }
       @else if (error()) { <div class="empty">{{ error() }}</div> }
       @else {
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>Number</th><th>Patient</th><th>Created</th><th>Due</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Balance</th><th>Status</th></tr></thead>
+            <thead><tr><th>{{ 'billing.number' | translate }}</th><th>{{ 'common.patient' | translate }}</th><th>{{ 'common.created' | translate }}</th><th>{{ 'billing.due' | translate }}</th><th class="num">{{ 'common.total' | translate }}</th><th class="num">{{ 'billing.paid' | translate }}</th><th class="num">{{ 'billing.balance' | translate }}</th><th>{{ 'common.status' | translate }}</th></tr></thead>
             <tbody>
               @for (i of items(); track i.id) {
                 <tr class="clickable" (click)="open(i)">
                   <td class="mono">{{ i.number }}</td>
                   <td>@if (i.patient) { <a [routerLink]="['/patients', i.patientId]" (click)="$event.stopPropagation()">{{ i.patient.firstName }} {{ i.patient.lastName }}</a> } @else { — }</td>
-                  <td class="nowrap">{{ fmtDate(i.createdAt) }}</td>
-                  <td class="nowrap">{{ fmtDate(i.dueAt) }}</td>
-                  <td class="num">{{ money(i.total, i.currency) }}</td>
-                  <td class="num">{{ money(i.amountPaid, i.currency) }}</td>
-                  <td class="num strong">{{ money(num(i.total) - num(i.amountPaid), i.currency) }}</td>
-                  <td><cf-chip [status]="i.status" /></td>
+                  <td class="nowrap">{{ lang.formatDate(i.createdAt) }}</td>
+                  <td class="nowrap">{{ lang.formatDate(i.dueAt) }}</td>
+                  <td class="num">{{ lang.formatMoney(i.total, i.currency) }}</td>
+                  <td class="num">{{ lang.formatMoney(i.amountPaid, i.currency) }}</td>
+                  <td class="num strong">{{ lang.formatMoney(num(i.total) - num(i.amountPaid), i.currency) }}</td>
+                  <td><cf-chip [status]="i.status" group="status" /></td>
                 </tr>
-              } @empty { <tr><td colspan="8" class="empty">No invoices.</td></tr> }
+              } @empty { <tr><td colspan="8" class="empty">{{ 'billing.noInvoices' | translate }}</td></tr> }
             </tbody>
           </table>
         </div>
@@ -55,14 +54,12 @@ import { CreateInvoiceDialog } from './create-invoice-dialog';
 })
 export class InvoicesTab {
   private readonly api = inject(BillingApi);
-  private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
+  readonly lang = inject(LanguageService);
   readonly patientId = input('');
   readonly changed = output<void>();
   readonly statuses = INVOICE_STATUSES;
-  readonly fmtDate = fmtDate;
   readonly num = num;
-  readonly money = (v: number | string, c?: string) => money(v, c || this.auth.clinic()?.currency);
   readonly pageSize = 25;
   readonly items = signal<Invoice[]>([]);
   readonly total = signal(0);
@@ -82,7 +79,7 @@ export class InvoicesTab {
     this.loading.set(true);
     this.api.invoices({ status: this.status() || undefined, patientId: this.patientFilter || undefined, page: this.page(), pageSize: this.pageSize }).subscribe({
       next: (r) => { this.items.set(r.items ?? []); this.total.set(r.total ?? 0); this.loading.set(false); },
-      error: (err) => { this.loading.set(false); this.error.set(errorMessage(err, 'Billing is not available yet.')); },
+      error: (err) => { this.loading.set(false); this.error.set(this.lang.errorMessage(err, this.lang.t('billing.unavailable'))); },
     });
   }
 }

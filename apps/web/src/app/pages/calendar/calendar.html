@@ -1,27 +1,27 @@
 <div class="page">
-  <cf-page-header title="Calendar" [subtitle]="title()">
+  <cf-page-header [title]="'calendar.title' | translate" [subtitle]="title()">
     <div class="row gap-1">
-      <button type="button" class="btn sm" (click)="shift(-1)">‹</button>
-      <button type="button" class="btn sm" (click)="today()">Today</button>
-      <button type="button" class="btn sm" (click)="shift(1)">›</button>
+      <button type="button" class="btn sm" (click)="shift(-1)" [attr.aria-label]="'common.previous' | translate">‹</button>
+      <button type="button" class="btn sm" (click)="today()">{{ 'calendar.today' | translate }}</button>
+      <button type="button" class="btn sm" (click)="shift(1)" [attr.aria-label]="'common.next' | translate">›</button>
     </div>
     <div class="seg">
-      <button type="button" [class.on]="view() === 'week'" (click)="setView('week')">Week</button>
-      <button type="button" [class.on]="view() === 'day'" (click)="setView('day')">Day</button>
+      <button type="button" [class.on]="view() === 'week'" (click)="setView('week')">{{ 'calendar.week' | translate }}</button>
+      <button type="button" [class.on]="view() === 'day'" (click)="setView('day')">{{ 'calendar.day' | translate }}</button>
     </div>
-    <select class="input sm" style="width: 220px" [value]="doctorId()" (change)="onDoctor($event)" [disabled]="lockDoctor">
-      <option value="">All doctors</option>
+    <select class="input sm" style="width: 220px" [value]="doctorId()" (change)="onDoctor($event)" [disabled]="lockDoctor" [attr.aria-label]="'common.doctor' | translate">
+      <option value="">{{ 'doctors.all' | translate }}</option>
       @for (d of doctors(); track d.id) { <option [value]="d.id">{{ d.title }} {{ d.firstName }} {{ d.lastName }}</option> }
     </select>
-    <button *hasPermission="'appointments:write'" type="button" class="btn" [class.primary]="finder()" (click)="finder.set(!finder())">⌕ Find a slot</button>
-    <button *hasPermission="'appointments:write'" type="button" class="btn primary" (click)="openDialog(null, null)">+ New appointment</button>
+    <button *hasPermission="'appointments:write'" type="button" class="btn" [class.primary]="finder()" (click)="finder.set(!finder())">⌕ {{ 'calendar.findSlot' | translate }}</button>
+    <button *hasPermission="'appointments:write'" type="button" class="btn primary" (click)="openDialog(null, null)">+ {{ 'appointments.new' | translate }}</button>
   </cf-page-header>
 
   @if (error()) { <div class="inline-alert info">{{ error() }}</div> }
 
   <div class="legend">
     @for (d of doctors(); track d.id) { <span class="row gap-1 small"><span class="pill-color" [style.background]="d.color || '#94a3b8'"></span>{{ d.firstName }} {{ d.lastName }}</span> }
-    @if (loading()) { <span class="spinner" style="margin-left: auto"></span> }
+    @if (loading()) { <span class="spinner" style="margin-inline-start: auto"></span> }
   </div>
 
   <div class="layout" [class.with-panel]="finder()">
@@ -41,12 +41,12 @@
           @for (ev of byDay()[i]; track ev.a.id) {
             <button type="button" class="ev" [class.done]="ev.a.status === 'COMPLETED' || ev.a.status === 'NO_SHOW'"
               [style.top.px]="ev.top" [style.height.px]="ev.height"
-              [style.left]="'calc(' + (ev.col * 100 / ev.cols) + '% + 2px)'" [style.width]="'calc(' + (100 / ev.cols) + '% - 4px)'"
-              [style.border-left-color]="ev.color" [style.background]="ev.color + '1a'"
-              (click)="openEvent(ev.a, $event)" [title]="timeLabel(ev.a) + ' · ' + ev.a.patient?.firstName + ' ' + ev.a.patient?.lastName + ' · ' + ev.a.status">
+              [style.inset-inline-start]="'calc(' + (ev.col * 100 / ev.cols) + '% + 2px)'" [style.width]="'calc(' + (100 / ev.cols) + '% - 4px)'"
+              [style.border-inline-start-color]="ev.color" [style.background]="ev.color + '1a'"
+              (click)="openEvent(ev.a, $event)" [title]="timeLabel(ev.a) + ' · ' + ev.a.patient?.firstName + ' ' + ev.a.patient?.lastName + ' · ' + lang.enumLabel(ev.a.status, 'status')">
               <div class="ev-time">{{ timeLabel(ev.a) }}</div>
-              <div class="ev-name">{{ ev.a.patient?.firstName }} {{ ev.a.patient?.lastName }}</div>
-              @if (ev.height > 44) { <div class="ev-sub">{{ ev.a.doctor?.lastName }} · {{ ev.a.status.replace('_', ' ') }}</div> }
+              <div class="ev-name"><bdi>{{ ev.a.patient?.firstName }} {{ ev.a.patient?.lastName }}</bdi></div>
+              @if (ev.height > 44) { <div class="ev-sub"><bdi>{{ ev.a.doctor?.lastName }}</bdi> · {{ lang.enumLabel(ev.a.status, 'status') }}</div> }
             </button>
           }
         </div>

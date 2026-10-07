@@ -1,90 +1,90 @@
 <div class="page">
   @if (enc(); as e) {
-    <cf-page-header title="Encounter" [subtitle]="fmt(e.occurredAt) + ' · ' + (e.doctor?.title || '') + ' ' + e.doctor?.firstName + ' ' + e.doctor?.lastName">
-      <cf-chip [status]="e.status" />
+    <cf-page-header [title]="'encounters.encounter' | translate" [subtitle]="lang.formatDateTime(e.occurredAt) + ' · ' + (e.doctor?.title || '') + ' ' + e.doctor?.firstName + ' ' + e.doctor?.lastName">
+      <cf-chip [status]="e.status" group="status" />
       <a class="btn" [routerLink]="['/patients', e.patientId]">{{ e.patient?.firstName }} {{ e.patient?.lastName }} ({{ e.patient?.mrn }})</a>
-      @if (e.appointmentId) { <a class="btn" [routerLink]="['/appointments', e.appointmentId]">Appointment</a> }
-      @if (editable()) { <button type="button" class="btn" (click)="save()" [disabled]="saving() || !dirty()">{{ saving() ? 'Saving…' : 'Save' }}</button> }
-      @if (canSign && e.status === 'DRAFT') { <button type="button" class="btn primary" (click)="sign()" [disabled]="signing() || saving()" [title]="isAuthor() ? '' : 'Only the authoring doctor can sign'">{{ signing() ? 'Signing…' : 'Sign' }}</button> }
+      @if (e.appointmentId) { <a class="btn" [routerLink]="['/appointments', e.appointmentId]">{{ 'appointments.title' | translate }}</a> }
+      @if (editable()) { <button type="button" class="btn" (click)="save()" [disabled]="saving() || !dirty()">{{ (saving() ? 'common.saving' : 'common.save') | translate }}</button> }
+      @if (canSign && e.status === 'DRAFT') { <button type="button" class="btn primary" (click)="sign()" [disabled]="signing() || saving()" [title]="isAuthor() ? '' : ('encounters.onlyAuthorSigns' | translate)">{{ (signing() ? 'encounters.signing' : 'encounters.sign') | translate }}</button> }
     </cf-page-header>
 
     @if (e.status !== 'DRAFT') {
       <div class="inline-alert" [class.success]="e.status === 'SIGNED'" [class.info]="e.status === 'AMENDED'">
-        This encounter was signed {{ fmt(e.signedAt) }}.
-        @if (editable()) { Changes you make will mark it as <strong>amended</strong>. } @else { It is read-only. }
+        {{ 'encounters.signedAt' | translate: { date: lang.formatDateTime(e.signedAt) } }}
+        @if (editable()) { {{ 'encounters.changesAmend' | translate }} } @else { {{ 'encounters.readOnly' | translate }} }
       </div>
     }
 
     <div class="layout">
       <form [formGroup]="form" class="col soap">
         <div class="card">
-          <div class="card-header"><h3>Visit</h3></div>
+          <div class="card-header"><h3>{{ 'encounters.visit' | translate }}</h3></div>
           <div class="card-body">
-            <div class="field"><label>Chief complaint</label><input class="input" formControlName="chiefComplaint" /></div>
-            <div class="label-text mb-1">Vitals</div>
+            <div class="field"><label>{{ 'encounters.chiefComplaint' | translate }}</label><input class="input" formControlName="chiefComplaint" /></div>
+            <div class="label-text mb-1">{{ 'encounters.vitals' | translate }}</div>
             <div class="vitals" formGroupName="vitals">
-              <div class="field"><label>Temp (°C)</label><input class="input" type="number" step="0.1" formControlName="temperature" /></div>
-              <div class="field"><label>Heart rate</label><input class="input" type="number" formControlName="heartRate" /></div>
-              <div class="field"><label>Blood pressure</label><input class="input" placeholder="120/80" formControlName="bloodPressure" /></div>
-              <div class="field"><label>Weight (kg)</label><input class="input" type="number" step="0.1" formControlName="weight" /></div>
+              <div class="field"><label>{{ 'encounters.temperature' | translate }}</label><input class="input" type="number" step="0.1" formControlName="temperature" /></div>
+              <div class="field"><label>{{ 'encounters.heartRate' | translate }}</label><input class="input" type="number" formControlName="heartRate" /></div>
+              <div class="field"><label>{{ 'encounters.bloodPressure' | translate }}</label><input class="input" placeholder="120/80" formControlName="bloodPressure" dir="ltr" /></div>
+              <div class="field"><label>{{ 'encounters.weight' | translate }}</label><input class="input" type="number" step="0.1" formControlName="weight" /></div>
             </div>
           </div>
         </div>
         <div class="card">
-          <div class="card-header"><h3>SOAP note</h3></div>
+          <div class="card-header"><h3>{{ 'encounters.soapNote' | translate }}</h3></div>
           <div class="card-body">
-            <div class="field"><label>Subjective</label><textarea class="input" formControlName="subjective" placeholder="Patient-reported history and symptoms"></textarea></div>
-            <div class="field"><label>Objective</label><textarea class="input" formControlName="objective" placeholder="Exam findings, measurements, results"></textarea></div>
-            <div class="field"><label>Assessment</label><textarea class="input" formControlName="assessment" placeholder="Clinical impression"></textarea></div>
-            <div class="field"><label>Plan</label><textarea class="input" formControlName="plan" placeholder="Treatment, follow-up, referrals"></textarea></div>
+            <div class="field"><label>{{ 'encounters.soap.subjective' | translate }}</label><textarea class="input" formControlName="subjective" [placeholder]="'encounters.soapPlaceholders.subjective' | translate"></textarea></div>
+            <div class="field"><label>{{ 'encounters.soap.objective' | translate }}</label><textarea class="input" formControlName="objective" [placeholder]="'encounters.soapPlaceholders.objective' | translate"></textarea></div>
+            <div class="field"><label>{{ 'encounters.soap.assessment' | translate }}</label><textarea class="input" formControlName="assessment" [placeholder]="'encounters.soapPlaceholders.assessment' | translate"></textarea></div>
+            <div class="field"><label>{{ 'encounters.soap.plan' | translate }}</label><textarea class="input" formControlName="plan" [placeholder]="'encounters.soapPlaceholders.plan' | translate"></textarea></div>
           </div>
         </div>
       </form>
 
       <div class="col">
         <div class="card">
-          <div class="card-header"><h3>Diagnoses</h3></div>
+          <div class="card-header"><h3>{{ 'encounters.diagnoses' | translate }}</h3></div>
           <div class="card-body">
             @for (d of e.diagnoses ?? []; track d.id) {
               <div class="list-item">
                 <span class="chip" [class.teal]="d.isPrimary" [class.gray]="!d.isPrimary">{{ d.code }}</span>
-                <div class="flex-1">{{ d.description }} @if (d.isPrimary) { <span class="subtle">(primary)</span> }</div>
-                @if (editable()) { <button type="button" class="btn ghost xs danger-text" (click)="removeDx(d.id)">✕</button> }
+                <div class="flex-1">{{ d.description }} @if (d.isPrimary) { <span class="subtle">({{ 'encounters.primary' | translate }})</span> }</div>
+                @if (editable()) { <button type="button" class="btn ghost xs danger-text" (click)="removeDx(d.id)" [attr.aria-label]="'common.remove' | translate">✕</button> }
               </div>
-            } @empty { <div class="muted">No diagnoses recorded.</div> }
+            } @empty { <div class="muted">{{ 'encounters.noDiagnoses' | translate }}</div> }
             @if (editable()) {
               <div class="row wrap mt-2">
-                <input class="input sm" style="width: 90px" placeholder="ICD-10" [(ngModel)]="dx.code" />
-                <input class="input sm flex-1" placeholder="Description" [(ngModel)]="dx.description" />
-                <label class="checkbox small"><input type="checkbox" [(ngModel)]="dx.isPrimary" /> Primary</label>
-                <button type="button" class="btn sm primary" (click)="addDx()" [disabled]="busy() || !dx.code || !dx.description">Add</button>
+                <input class="input sm" style="width: 90px" placeholder="ICD-10" [(ngModel)]="dx.code" dir="ltr" />
+                <input class="input sm flex-1" [placeholder]="'common.description' | translate" [(ngModel)]="dx.description" />
+                <label class="checkbox small"><input type="checkbox" [(ngModel)]="dx.isPrimary" /> {{ 'encounters.primary' | translate }}</label>
+                <button type="button" class="btn sm primary" (click)="addDx()" [disabled]="busy() || !dx.code || !dx.description">{{ 'common.add' | translate }}</button>
               </div>
             }
           </div>
         </div>
         <div class="card">
-          <div class="card-header"><h3>Prescriptions</h3></div>
+          <div class="card-header"><h3>{{ 'encounters.prescriptions' | translate }}</h3></div>
           <div class="card-body">
             @for (rx of e.prescriptions ?? []; track rx.id) {
               <div class="list-item">
                 <div class="flex-1">
                   <div class="strong">{{ rx.medication }} <span class="muted">{{ rx.dosage }}</span></div>
-                  <div class="subtle">{{ rx.frequency }}@if (rx.durationDays) { · {{ rx.durationDays }} days }@if (rx.instructions) { · {{ rx.instructions }} }</div>
+                  <div class="subtle">{{ rx.frequency }}@if (rx.durationDays) { · {{ 'common.units.days' | translate: { n: rx.durationDays } }} }@if (rx.instructions) { · {{ rx.instructions }} }</div>
                 </div>
                 @if (editable()) {
-                  <select class="input sm" style="width: 140px" [value]="rx.status" (change)="setRxStatus(rx.id, $event)">@for (s of rxStatuses; track s) { <option [value]="s">{{ s }}</option> }</select>
-                } @else { <cf-chip [status]="rx.status" /> }
+                  <select class="input sm" style="width: 140px" [value]="rx.status" (change)="setRxStatus(rx.id, $event)" [attr.aria-label]="'common.status' | translate">@for (s of rxStatuses; track s) { <option [value]="s">{{ lang.enumLabel(s, 'status') }}</option> }</select>
+                } @else { <cf-chip [status]="rx.status" group="status" /> }
               </div>
-            } @empty { <div class="muted">No prescriptions.</div> }
+            } @empty { <div class="muted">{{ 'encounters.noPrescriptions' | translate }}</div> }
             @if (editable()) {
               <div class="form-grid mt-2">
-                <div class="field"><input class="input sm" placeholder="Medication" [(ngModel)]="rx.medication" /></div>
-                <div class="field"><input class="input sm" placeholder="Dosage (e.g. 500 mg)" [(ngModel)]="rx.dosage" /></div>
-                <div class="field"><input class="input sm" placeholder="Frequency (e.g. twice daily)" [(ngModel)]="rx.frequency" /></div>
-                <div class="field"><input class="input sm" type="number" placeholder="Duration (days)" [(ngModel)]="rx.durationDays" /></div>
-                <div class="field span-2"><input class="input sm" placeholder="Instructions" [(ngModel)]="rx.instructions" /></div>
+                <div class="field"><input class="input sm" [placeholder]="'encounters.medication' | translate" [(ngModel)]="rx.medication" /></div>
+                <div class="field"><input class="input sm" [placeholder]="'encounters.dosagePlaceholder' | translate" [(ngModel)]="rx.dosage" /></div>
+                <div class="field"><input class="input sm" [placeholder]="'encounters.frequencyPlaceholder' | translate" [(ngModel)]="rx.frequency" /></div>
+                <div class="field"><input class="input sm" type="number" [placeholder]="'encounters.durationDays' | translate" [(ngModel)]="rx.durationDays" /></div>
+                <div class="field span-2"><input class="input sm" [placeholder]="'encounters.instructions' | translate" [(ngModel)]="rx.instructions" /></div>
               </div>
-              <div class="row end"><button type="button" class="btn sm primary" (click)="addRx()" [disabled]="busy() || !rx.medication || !rx.dosage || !rx.frequency">Add prescription</button></div>
+              <div class="row end"><button type="button" class="btn sm primary" (click)="addRx()" [disabled]="busy() || !rx.medication || !rx.dosage || !rx.frequency">{{ 'encounters.addPrescription' | translate }}</button></div>
             }
           </div>
         </div>
@@ -92,5 +92,5 @@
       </div>
     </div>
   } @else if (error()) { <div class="inline-alert error">{{ error() }}</div> }
-  @else { <div class="loading"><span class="spinner"></span> Loading…</div> }
+  @else { <div class="loading"><span class="spinner"></span> {{ 'common.loading' | translate }}</div> }
 </div>

@@ -1,11 +1,13 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
-import { addDays, format, isSameDay, startOfDay } from 'date-fns';
+import { addDays, isSameDay, startOfDay } from 'date-fns';
+import { TranslatePipe } from '@ngx-translate/core';
 import { AppointmentsApi } from '../../core/api/appointments.api';
 import { DoctorsApi } from '../../core/api/doctors.api';
 import { PatientsApi } from '../../core/api/patients.api';
 import { AuthService } from '../../core/auth.service';
-import { ToastService, errorMessage } from '../../core/toast.service';
+import { ToastService } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { Appointment, Doctor, PatientRef } from '../../core/models';
 import { dayRange, weekRange } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
@@ -44,7 +46,7 @@ export function layoutDay(appts: Appointment[]): CalEvent[] {
 
 @Component({
   selector: 'cf-calendar',
-  imports: [PageHeaderComponent, HasPermissionDirective, BookingDialogComponent, FindSlotPanelComponent],
+  imports: [TranslatePipe, PageHeaderComponent, HasPermissionDirective, BookingDialogComponent, FindSlotPanelComponent],
   templateUrl: './calendar.html',
   styleUrl: './calendar.scss',
 })
@@ -54,6 +56,7 @@ export class CalendarPage {
   private readonly patientsApi = inject(PatientsApi);
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
+  readonly lang = inject(LanguageService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 
@@ -77,7 +80,7 @@ export class CalendarPage {
   });
   readonly title = computed(() => {
     const d = this.days();
-    return this.view() === 'day' ? format(d[0], 'EEEE, dd MMM yyyy') : `${format(d[0], 'dd MMM')} – ${format(d[6], 'dd MMM yyyy')}`;
+    return this.view() === 'day' ? this.lang.formatLongDate(d[0]) : `${this.lang.formatDayMonth(d[0])} – ${this.lang.formatDate(d[6])}`;
   });
   readonly byDay = computed(() => {
     const list = this.appointments().filter((a) => a.status !== 'CANCELLED');
@@ -100,9 +103,9 @@ export class CalendarPage {
   }
 
   isToday(d: Date) { return isSameDay(d, new Date()); }
-  dayLabel(d: Date) { return format(d, 'EEE dd'); }
-  hourLabel(h: number) { return `${String(h).padStart(2, '0')}:00`; }
-  timeLabel(a: Appointment) { return `${format(new Date(a.startsAt), 'HH:mm')}–${format(new Date(a.endsAt), 'HH:mm')}`; }
+  dayLabel(d: Date) { return this.lang.formatDate(d, { weekday: 'short', day: '2-digit' }); }
+  hourLabel(h: number) { return this.lang.formatTime(new Date(2000, 0, 1, h, 0, 0)); }
+  timeLabel(a: Appointment) { return this.lang.formatTimeRange(a.startsAt, a.endsAt); }
 
   setView(v: 'week' | 'day') { this.view.set(v); this.load(); }
   today() { this.anchor.set(startOfDay(new Date())); this.load(); }
@@ -115,7 +118,7 @@ export class CalendarPage {
     this.error.set(null);
     this.api.calendar({ from: r.from, to: r.to, doctorId: this.doctorId() || undefined }).subscribe({
       next: (list) => { this.appointments.set(list ?? []); this.loading.set(false); },
-      error: (err) => { this.loading.set(false); this.appointments.set([]); this.error.set(errorMessage(err, 'Calendar is not available yet.')); },
+      error: (err) => { this.loading.set(false); this.appointments.set([]); this.error.set(this.lang.errorMessage(err, this.lang.t('calendar.unavailable'))); },
     });
   }
 

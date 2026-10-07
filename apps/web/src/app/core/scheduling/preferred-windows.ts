@@ -19,15 +19,31 @@ export function removeWindow(rows: PreferredWindow[], index: number): PreferredW
 }
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-/** Returns a human-readable problem for the first invalid row, or null when all rows are valid. */
-export function validateWindows(rows: PreferredWindow[], weekdayNames: string[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']): string | null {
+
+/** Structured validation problem (translate with `errors.windows.<key>` and the params). */
+export interface WindowsProblem { key: 'invalidWeekday' | 'timeFormat' | 'endAfterStart'; params: Record<string, unknown>; }
+
+/** First invalid row as a translatable problem, or null when all rows are valid. */
+export function windowsProblem(rows: PreferredWindow[], weekdayNames: string[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']): WindowsProblem | null {
   for (const r of rows) {
     const day = weekdayNames[r.weekday] ?? `weekday ${r.weekday}`;
-    if (!Number.isInteger(r.weekday) || r.weekday < 0 || r.weekday > 6) return `Invalid weekday (${r.weekday}).`;
-    if (!TIME_RE.test(r.startTime) || !TIME_RE.test(r.endTime)) return `${day}: times must be HH:mm.`;
-    if (r.startTime >= r.endTime) return `${day}: end time must be after start time.`;
+    if (!Number.isInteger(r.weekday) || r.weekday < 0 || r.weekday > 6) return { key: 'invalidWeekday', params: { weekday: r.weekday } };
+    if (!TIME_RE.test(r.startTime) || !TIME_RE.test(r.endTime)) return { key: 'timeFormat', params: { day } };
+    if (r.startTime >= r.endTime) return { key: 'endAfterStart', params: { day } };
   }
   return null;
+}
+
+const PROBLEM_TEXT: Record<WindowsProblem['key'], (p: Record<string, unknown>) => string> = {
+  invalidWeekday: (p) => `Invalid weekday (${p['weekday']}).`,
+  timeFormat: (p) => `${p['day']}: times must be HH:mm.`,
+  endAfterStart: (p) => `${p['day']}: end time must be after start time.`,
+};
+
+/** Returns a human-readable (English) problem for the first invalid row, or null when all rows are valid. */
+export function validateWindows(rows: PreferredWindow[], weekdayNames?: string[]): string | null {
+  const p = windowsProblem(rows, weekdayNames);
+  return p ? PROBLEM_TEXT[p.key](p.params) : null;
 }
 
 /** Normalises for the API: drops invalid rows, sorts by weekday/start, merges duplicate rows. */

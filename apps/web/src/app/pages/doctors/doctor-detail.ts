@@ -1,19 +1,21 @@
-import { Component, inject, input, signal } from '@angular/core';
+import { Component, computed, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
 import { DoctorsApi } from '../../core/api/doctors.api';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { ConfirmService } from '../../shared/confirm.service';
 import { AvailabilitySlot, Doctor } from '../../core/models';
-import { WEEKDAYS, fmtDateTime, timeOptions } from '../../core/date-utils';
+import { timeOptions } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { StatusChipComponent } from '../../shared/status-chip';
 import { HasPermissionDirective } from '../../core/permission.directive';
 
 @Component({
   selector: 'cf-doctor-detail',
-  imports: [FormsModule, RouterLink, PageHeaderComponent, StatusChipComponent, HasPermissionDirective],
+  imports: [FormsModule, RouterLink, TranslatePipe, PageHeaderComponent, StatusChipComponent, HasPermissionDirective],
   templateUrl: './doctor-detail.html',
   styles: [`
     .day { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--cf-border); align-items: start; }
@@ -28,9 +30,9 @@ export class DoctorDetailPage {
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
   private readonly confirm = inject(ConfirmService);
+  readonly lang = inject(LanguageService);
   readonly id = input.required<string>();
-  readonly fmt = fmtDateTime;
-  readonly weekdays = WEEKDAYS;
+  readonly weekdays = computed(() => this.lang.weekdayNames('long'));
   readonly times = timeOptions(15, 6, 23);
   readonly dayOrder = [1, 2, 3, 4, 5, 6, 0];
   readonly doctor = signal<Doctor | null>(null);
@@ -65,10 +67,10 @@ export class DoctorDetailPage {
   }
   saveAvailability() {
     const bad = this.slots().find((s) => s.startTime >= s.endTime);
-    if (bad) { this.toast.error(`${WEEKDAYS[bad.weekday]}: end time must be after start time.`); return; }
+    if (bad) { this.toast.error(this.lang.t('errors.windows.endAfterStart', { day: this.weekdays()[bad.weekday] })); return; }
     this.saving.set(true);
     this.api.setAvailability(this.id(), this.slots().map((s) => ({ weekday: s.weekday, startTime: s.startTime, endTime: s.endTime, slotMinutes: Number(s.slotMinutes) || 30 }))).subscribe({
-      next: () => { this.saving.set(false); this.toast.success('Availability saved'); this.load(); },
+      next: () => { this.saving.set(false); this.toast.success(this.lang.t('doctors.availabilitySaved')); this.load(); },
       error: (err) => { this.saving.set(false); this.toast.fromError(err); },
     });
   }
@@ -78,17 +80,17 @@ export class DoctorDetailPage {
     this.api.addTimeOff(this.id(), {
       startsAt: new Date(this.timeOff.startsAt).toISOString(), endsAt: new Date(this.timeOff.endsAt).toISOString(), reason: this.timeOff.reason || undefined,
     }).subscribe({
-      next: () => { this.addingTimeOff.set(false); this.timeOff = { startsAt: '', endsAt: '', reason: '' }; this.toast.success('Time off added'); this.load(); },
+      next: () => { this.addingTimeOff.set(false); this.timeOff = { startsAt: '', endsAt: '', reason: '' }; this.toast.success(this.lang.t('doctors.timeOffAdded')); this.load(); },
       error: (err) => { this.addingTimeOff.set(false); this.toast.fromError(err); },
     });
   }
   async removeTimeOff(id: string) {
-    if (!(await this.confirm.ask({ title: 'Remove time off', message: 'Remove this time-off entry?', danger: true, confirmText: 'Remove' }))) return;
+    if (!(await this.confirm.ask({ title: this.lang.t('doctors.removeTimeOff'), message: this.lang.t('doctors.removeTimeOffConfirm'), danger: true, confirmText: this.lang.t('common.remove') }))) return;
     this.api.removeTimeOff(this.id(), id).subscribe({ next: () => this.load(), error: (err) => this.toast.fromError(err) });
   }
   async deactivate() {
     const d = this.doctor();
-    if (!d || !(await this.confirm.ask({ title: 'Deactivate doctor', message: `Deactivate ${d.firstName} ${d.lastName}? They will no longer appear for booking.`, danger: true, confirmText: 'Deactivate' }))) return;
-    this.api.deactivate(d.id).subscribe({ next: () => { this.toast.success('Doctor deactivated'); this.load(); }, error: (err) => this.toast.fromError(err) });
+    if (!d || !(await this.confirm.ask({ title: this.lang.t('doctors.deactivate'), message: this.lang.t('doctors.deactivateConfirm', { name: `${d.firstName} ${d.lastName}` }), danger: true, confirmText: this.lang.t('doctors.deactivate') }))) return;
+    this.api.deactivate(d.id).subscribe({ next: () => { this.toast.success(this.lang.t('doctors.deactivated')); this.load(); }, error: (err) => this.toast.fromError(err) });
   }
 }

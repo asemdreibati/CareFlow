@@ -1,19 +1,20 @@
 import { Component, computed, inject, input, signal } from '@angular/core';
 import { FormBuilder, FormsModule, ReactiveFormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
 import { RecordsApi } from '../../core/api/records.api';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { ConfirmService } from '../../shared/confirm.service';
 import { Encounter, EncounterDto, PrescriptionStatus } from '../../core/models';
-import { fmtDateTime } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { StatusChipComponent } from '../../shared/status-chip';
 import { EncounterAiPanel } from './ai-panel';
 
 @Component({
   selector: 'cf-encounter-editor',
-  imports: [FormsModule, ReactiveFormsModule, RouterLink, PageHeaderComponent, StatusChipComponent, EncounterAiPanel],
+  imports: [FormsModule, ReactiveFormsModule, RouterLink, TranslatePipe, PageHeaderComponent, StatusChipComponent, EncounterAiPanel],
   templateUrl: './encounter-editor.html',
   styles: [`
     .soap textarea { min-height: 110px; }
@@ -30,8 +31,8 @@ export class EncounterEditorPage {
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
   private readonly confirm = inject(ConfirmService);
+  readonly lang = inject(LanguageService);
   readonly id = input.required<string>();
-  readonly fmt = fmtDateTime;
   readonly enc = signal<Encounter | null>(null);
   readonly error = signal<string | null>(null);
   readonly saving = signal(false);
@@ -71,7 +72,7 @@ export class EncounterEditorPage {
         this.dirty.set(false);
         this.editable() ? this.form.enable({ emitEvent: false }) : this.form.disable({ emitEvent: false });
       },
-      error: (err) => { this.error.set('Could not load encounter.'); this.toast.fromError(err); },
+      error: (err) => { this.error.set(this.lang.t('encounters.loadFailed')); this.toast.fromError(err); },
     });
   }
 
@@ -88,22 +89,22 @@ export class EncounterEditorPage {
   save(then?: () => void) {
     this.saving.set(true);
     this.api.updateEncounter(this.id(), this.dto()).subscribe({
-      next: () => { this.saving.set(false); this.dirty.set(false); this.toast.success('Encounter saved'); then ? then() : this.load(); },
+      next: () => { this.saving.set(false); this.dirty.set(false); this.toast.success(this.lang.t('encounters.saved')); then ? then() : this.load(); },
       error: (err) => { this.saving.set(false); this.toast.fromError(err); },
     });
   }
 
   async sign() {
     const ok = await this.confirm.ask({
-      title: 'Sign encounter',
-      message: 'Signing locks this note as the official record and marks the linked appointment completed.\nContinue?',
-      confirmText: 'Sign',
+      title: this.lang.t('encounters.signTitle'),
+      message: this.lang.t('encounters.signConfirm'),
+      confirmText: this.lang.t('encounters.sign'),
     });
     if (!ok) return;
     const doSign = () => {
       this.signing.set(true);
       this.api.sign(this.id()).subscribe({
-        next: () => { this.signing.set(false); this.toast.success('Encounter signed'); this.load(); },
+        next: () => { this.signing.set(false); this.toast.success(this.lang.t('encounters.signed')); this.load(); },
         error: (err) => { this.signing.set(false); this.toast.fromError(err); },
       });
     };

@@ -1,34 +1,36 @@
 import { Component, inject, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { TranslatePipe } from '@ngx-translate/core';
 import { AiApi } from '../../core/api/ai.api';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { AiInteraction, Encounter } from '../../core/models';
 import { StatusChipComponent } from '../../shared/status-chip';
 
 @Component({
   selector: 'cf-encounter-ai-panel',
-  imports: [FormsModule, StatusChipComponent],
+  imports: [FormsModule, TranslatePipe, StatusChipComponent],
   template: `
     @if (enabled() && canUse) {
       <div class="card">
-        <div class="card-header"><h3>AI SOAP draft</h3><span class="subtle">Drafts never touch the record until approved</span></div>
+        <div class="card-header"><h3>{{ 'ai.soapDraft' | translate }}</h3><span class="subtle">{{ 'ai.soapHint' | translate }}</span></div>
         <div class="card-body">
           @if (!draft()) {
-            <div class="field"><label>Dictation / transcript</label><textarea class="input" rows="5" [(ngModel)]="transcript" placeholder="Paste or dictate the visit summary…" [disabled]="generating()"></textarea></div>
-            <div class="row end"><button type="button" class="btn primary sm" (click)="generate()" [disabled]="generating() || !transcript.trim() || !editable()">{{ generating() ? 'Drafting…' : 'Generate SOAP draft' }}</button></div>
-            @if (!editable()) { <div class="subtle">The encounter is read-only; drafting is disabled.</div> }
+            <div class="field"><label>{{ 'ai.transcript' | translate }}</label><textarea class="input" rows="5" [(ngModel)]="transcript" [placeholder]="'ai.transcriptPlaceholder' | translate" [disabled]="generating()"></textarea></div>
+            <div class="row end"><button type="button" class="btn primary sm" (click)="generate()" [disabled]="generating() || !transcript.trim() || !editable()">{{ (generating() ? 'ai.drafting' : 'ai.generateSoap') | translate }}</button></div>
+            @if (!editable()) { <div class="subtle">{{ 'ai.readOnly' | translate }}</div> }
           } @else {
-            <div class="row between mb-1"><cf-chip [status]="draft()!.status" /><span class="subtle">{{ draft()!.model }}</span></div>
+            <div class="row between mb-1"><cf-chip [status]="draft()!.status" group="status" /><span class="subtle">{{ draft()!.model }}</span></div>
             @for (k of keys; track k) {
-              <div class="sec"><div class="label-text">{{ k }}</div><div class="txt">{{ draft()!.structuredOutput?.[k] || '—' }}</div></div>
+              <div class="sec"><div class="label-text">{{ 'encounters.soap.' + k | translate }}</div><div class="txt">{{ draft()!.structuredOutput?.[k] || '—' }}</div></div>
             }
             @if (draft()!.status === 'GENERATED') {
               <div class="row end mt-2">
-                <button type="button" class="btn danger-outline sm" (click)="review('REJECTED')" [disabled]="reviewing()">Reject</button>
-                @if (canReview) { <button type="button" class="btn success sm" (click)="review('APPROVED')" [disabled]="reviewing() || !editable()">Approve & apply</button> }
+                <button type="button" class="btn danger-outline sm" (click)="review('REJECTED')" [disabled]="reviewing()">{{ 'ai.reject' | translate }}</button>
+                @if (canReview) { <button type="button" class="btn success sm" (click)="review('APPROVED')" [disabled]="reviewing() || !editable()">{{ 'ai.approveApply' | translate }}</button> }
               </div>
-            } @else { <div class="row end mt-2"><button type="button" class="btn sm" (click)="draft.set(null)">New draft</button></div> }
+            } @else { <div class="row end mt-2"><button type="button" class="btn sm" (click)="draft.set(null)">{{ 'ai.newDraft' | translate }}</button></div> }
           }
         </div>
       </div>
@@ -40,6 +42,7 @@ export class EncounterAiPanel {
   private readonly api = inject(AiApi);
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
+  private readonly lang = inject(LanguageService);
   readonly encounter = input.required<Encounter>();
   readonly editable = input(false);
   readonly applied = output<void>();
@@ -58,7 +61,7 @@ export class EncounterAiPanel {
   generate() {
     this.generating.set(true);
     this.api.soapNote(this.encounter().id, this.transcript.trim()).subscribe({
-      next: (i) => { this.generating.set(false); this.draft.set(i); if (i.status === 'FAILED') this.toast.error(i.error || 'Draft generation failed'); },
+      next: (i) => { this.generating.set(false); this.draft.set(i); if (i.status === 'FAILED') this.toast.error(i.error || this.lang.t('ai.draftFailed')); },
       error: (err) => { this.generating.set(false); this.toast.fromError(err); },
     });
   }
@@ -69,7 +72,7 @@ export class EncounterAiPanel {
       next: (r) => {
         this.reviewing.set(false);
         this.draft.set({ ...d, ...r });
-        this.toast.success(decision === 'APPROVED' ? 'Draft applied to the encounter' : 'Draft rejected');
+        this.toast.success(this.lang.t(decision === 'APPROVED' ? 'ai.draftApplied' : 'ai.draftRejected'));
         if (decision === 'APPROVED') this.applied.emit();
       },
       error: (err) => { this.reviewing.set(false); this.toast.fromError(err); },

@@ -2,73 +2,75 @@ import { Component, computed, inject, input, output, signal } from '@angular/cor
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
+import { TranslatePipe } from '@ngx-translate/core';
 import { format } from 'date-fns';
 import { AppointmentsApi } from '../../core/api/appointments.api';
 import { SeriesApi } from '../../core/api/series.api';
 import { isResourceConflict, newIdempotencyKey } from '../../core/api/booking-headers';
 import { AuthService } from '../../core/auth.service';
-import { ToastService, errorMessage } from '../../core/toast.service';
+import { ToastService } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import {
   APPOINTMENT_TYPES, Appointment, AppointmentType, CreateSeriesDto, CreateSeriesResponse, Doctor, PatientRef, RECURRENCE_FREQUENCIES, RecurrenceFrequency,
   SeriesResolvePolicy,
 } from '../../core/models';
-import { SlotView, WEEKDAYS_SHORT, fmtDateTime, isoDate, renderSlots } from '../../core/date-utils';
+import { SlotView, isoDate, renderSlots } from '../../core/date-utils';
 import { DialogComponent } from '../../shared/dialog';
 import { PatientSearchComponent } from '../../shared/patient-search';
 import { ResourceSelectComponent } from '../../shared/resource-select';
 
 @Component({
   selector: 'cf-booking-dialog',
-  imports: [FormsModule, RouterLink, DialogComponent, PatientSearchComponent, ResourceSelectComponent],
+  imports: [FormsModule, RouterLink, TranslatePipe, DialogComponent, PatientSearchComponent, ResourceSelectComponent],
   template: `
-    <cf-dialog [title]="result() ? 'Series created' : 'New appointment'" [width]="680" (closed)="closed.emit()">
+    <cf-dialog [title]="(result() ? 'series.created' : 'appointments.new') | translate" [width]="680" (closed)="closed.emit()">
       @if (result(); as r) {
         <div class="inline-alert success">
-          Created <strong>{{ r.created.length }}</strong> appointment{{ r.created.length === 1 ? '' : 's' }}
-          @if (r.skipped.length) { · <strong>{{ r.skipped.length }}</strong> skipped }
-          @if (r.series.id) { · <a [routerLink]="['/series', r.series.id]" (click)="closed.emit()">Open series</a> }
+          {{ 'series.createdCount' | translate: { n: r.created.length } }}
+          @if (r.skipped.length) { · {{ 'series.skippedCount' | translate: { n: r.skipped.length } }} }
+          @if (r.series.id) { · <a [routerLink]="['/series', r.series.id]" (click)="closed.emit()">{{ 'series.open' | translate }}</a> }
         </div>
         <div class="summary">
           @for (a of r.created; track a.id) {
             <div class="list-item small">
               <span class="mono">#{{ (a.occurrenceIndex ?? $index) + 1 }}</span>
-              <span class="flex-1">{{ fmt(a.startsAt) }}@if (a.isException) { <span class="chip amber" style="margin-left: 6px">moved</span> }</span>
-              <a class="btn xs ghost" [routerLink]="['/appointments', a.id]" (click)="closed.emit()">Open</a>
+              <span class="flex-1">{{ lang.formatDateTime(a.startsAt) }}@if (a.isException) { <span class="chip amber" style="margin-inline-start: 6px">{{ 'series.moved' | translate }}</span> }</span>
+              <a class="btn xs ghost" [routerLink]="['/appointments', a.id]" (click)="closed.emit()">{{ 'common.open' | translate }}</a>
             </div>
           }
           @for (s of r.skipped; track s.index) {
             <div class="list-item small">
               <span class="mono">#{{ s.index + 1 }}</span>
-              <span class="flex-1 muted"><s>{{ fmt(s.plannedStartsAt) }}</s> — {{ s.reason }}</span>
-              <span class="chip gray">skipped</span>
+              <span class="flex-1 muted"><s>{{ lang.formatDateTime(s.plannedStartsAt) }}</s> — {{ s.reason }}</span>
+              <span class="chip gray">{{ 'series.skipped' | translate }}</span>
             </div>
           }
         </div>
       } @else {
         @if (conflict()) { <div class="inline-alert error" style="white-space: pre-line">{{ conflict() }}</div> }
         <div class="form-grid">
-          <div class="field span-2"><label class="req">Patient</label><cf-patient-search [initial]="initialPatient()" (selectedChange)="patient.set($event)" /></div>
-          <div class="field"><label class="req">Doctor</label>
+          <div class="field span-2"><label class="req">{{ 'common.patient' | translate }}</label><cf-patient-search [initial]="initialPatient()" (selectedChange)="patient.set($event)" /></div>
+          <div class="field"><label class="req">{{ 'common.doctor' | translate }}</label>
             <select class="input" [ngModel]="doctorId()" (ngModelChange)="doctorId.set($event); loadSlots()" [disabled]="lockDoctor">
-              <option value="">Select doctor…</option>
+              <option value="">{{ 'doctors.select' | translate }}</option>
               @for (d of doctors(); track d.id) { <option [value]="d.id">{{ d.title }} {{ d.firstName }} {{ d.lastName }} — {{ d.specialty }}</option> }
             </select>
           </div>
-          <div class="field"><label class="req">{{ repeat() ? 'First date' : 'Date' }}</label><input class="input" type="date" [ngModel]="date()" (ngModelChange)="date.set($event); loadSlots()" /></div>
-          <div class="field"><label>Duration</label>
+          <div class="field"><label class="req">{{ (repeat() ? 'booking.firstDate' : 'common.date') | translate }}</label><input class="input" type="date" [ngModel]="date()" (ngModelChange)="date.set($event); loadSlots()" /></div>
+          <div class="field"><label>{{ 'common.duration' | translate }}</label>
             <select class="input" [ngModel]="duration()" (ngModelChange)="duration.set(+$event); loadSlots()">
-              @for (m of durations(); track m) { <option [ngValue]="m">{{ m }} minutes</option> }
+              @for (m of durations(); track m) { <option [ngValue]="m">{{ lang.formatMinutes(m) }}</option> }
             </select>
           </div>
-          <div class="field"><label>Type</label>
-            <select class="input" [(ngModel)]="type">@for (t of types; track t) { <option [value]="t">{{ t }}</option> }</select>
+          <div class="field"><label>{{ 'common.type' | translate }}</label>
+            <select class="input" [(ngModel)]="type">@for (t of types; track t) { <option [value]="t">{{ lang.enumLabel(t, 'type') }}</option> }</select>
           </div>
           <div class="field span-2">
-            <label class="req">Available slots</label>
-            @if (slotsLoading()) { <div class="muted small">Loading availability…</div> }
+            <label class="req">{{ 'booking.availableSlots' | translate }}</label>
+            @if (slotsLoading()) { <div class="muted small">{{ 'booking.loadingAvailability' | translate }}</div> }
             @else if (slotsError()) { <div class="inline-alert info">{{ slotsError() }}</div> }
-            @else if (!doctorId() || !date()) { <div class="muted small">Choose a doctor and a date to see free slots.</div> }
-            @else if (!slots().length) { <div class="muted small">No free slots on this day.</div> }
+            @else if (!doctorId() || !date()) { <div class="muted small">{{ 'booking.chooseDoctorDate' | translate }}</div> }
+            @else if (!slots().length) { <div class="muted small">{{ 'booking.noFreeSlots' | translate }}</div> }
             @else {
               <div class="slots">
                 @for (s of slots(); track s.startsAt) {
@@ -77,53 +79,53 @@ import { ResourceSelectComponent } from '../../shared/resource-select';
               </div>
             }
           </div>
-          <div class="field span-2"><label>Resources <span class="subtle">(rooms, equipment)</span></label>
+          <div class="field span-2"><label>{{ 'nav.resources' | translate }} <span class="subtle">({{ 'resources.hint' | translate }})</span></label>
             <cf-resource-select [selected]="resourceIds()" (selectedChange)="resourceIds.set($event)" />
           </div>
-          <div class="field span-2"><label>Reason</label><input class="input" [(ngModel)]="reason" placeholder="Reason for visit" /></div>
-          <div class="field span-2"><label>Notes</label><textarea class="input" rows="2" [(ngModel)]="notes"></textarea></div>
+          <div class="field span-2"><label>{{ 'common.reason' | translate }}</label><input class="input" [(ngModel)]="reason" [placeholder]="'booking.reasonPlaceholder' | translate" /></div>
+          <div class="field span-2"><label>{{ 'common.notes' | translate }}</label><textarea class="input" rows="2" [(ngModel)]="notes"></textarea></div>
 
           <div class="span-2 repeat" [class.open]="repeat()">
-            <label class="checkbox"><input type="checkbox" [ngModel]="repeat()" (ngModelChange)="repeat.set($event)" /> <strong>Repeat…</strong> <span class="muted small">create a recurring series</span></label>
+            <label class="checkbox"><input type="checkbox" [ngModel]="repeat()" (ngModelChange)="repeat.set($event)" /> <strong>{{ 'booking.repeat' | translate }}</strong> <span class="muted small">{{ 'booking.repeatHint' | translate }}</span></label>
             @if (repeat()) {
               <div class="form-grid mt-1">
-                <div class="field"><label>Frequency</label>
+                <div class="field"><label>{{ 'series.frequency' | translate }}</label>
                   <select class="input" [ngModel]="frequency()" (ngModelChange)="frequency.set($event)">
-                    @for (f of frequencies; track f) { <option [value]="f">{{ f.toLowerCase() }}</option> }
+                    @for (f of frequencies; track f) { <option [value]="f">{{ lang.enumLabel(f, 'frequency') }}</option> }
                   </select>
                 </div>
-                <div class="field"><label>Every</label>
+                <div class="field"><label>{{ 'series.every' | translate }}</label>
                   <div class="row gap-1"><input class="input" type="number" min="1" max="52" style="width: 90px" [(ngModel)]="interval" /><span class="muted small">{{ intervalUnit() }}</span></div>
                 </div>
                 @if (frequency() === 'WEEKLY') {
-                  <div class="field span-2"><label>On weekdays</label>
+                  <div class="field span-2"><label>{{ 'series.onWeekdays' | translate }}</label>
                     <div class="row gap-1 wrap">
                       @for (d of dayOrder; track d) {
-                        <button type="button" class="day-chip" [class.on]="byWeekday().includes(d)" (click)="toggleWeekday(d)">{{ weekdays[d] }}</button>
+                        <button type="button" class="day-chip" [class.on]="byWeekday().includes(d)" (click)="toggleWeekday(d)">{{ weekdays()[d] }}</button>
                       }
                     </div>
                   </div>
                 }
                 @if (frequency() === 'MONTHLY') {
-                  <div class="field"><label>Day of month</label><input class="input" type="number" min="1" max="31" [(ngModel)]="byMonthDay" /></div>
+                  <div class="field"><label>{{ 'series.dayOfMonth' | translate }}</label><input class="input" type="number" min="1" max="31" [(ngModel)]="byMonthDay" /></div>
                 }
-                <div class="field"><label>Ends</label>
+                <div class="field"><label>{{ 'series.ends' | translate }}</label>
                   <div class="row gap-1">
                     <select class="input" style="width: 130px" [ngModel]="endMode()" (ngModelChange)="endMode.set($event)">
-                      <option value="count">after</option><option value="until">on date</option>
+                      <option value="count">{{ 'series.after' | translate }}</option><option value="until">{{ 'series.onDate' | translate }}</option>
                     </select>
-                    @if (endMode() === 'count') { <input class="input" type="number" min="1" max="365" style="width: 90px" [(ngModel)]="count" /><span class="muted small">times</span> }
+                    @if (endMode() === 'count') { <input class="input" type="number" min="1" max="365" style="width: 90px" [(ngModel)]="count" /><span class="muted small">{{ 'series.times' | translate }}</span> }
                     @else { <input class="input" type="date" [(ngModel)]="until" /> }
                   </div>
                 </div>
-                <div class="field"><label>If a slot is busy</label>
+                <div class="field"><label>{{ 'series.ifBusy' | translate }}</label>
                   <select class="input" [(ngModel)]="resolve">
-                    <option value="next-slot">Move to the next free slot</option>
-                    <option value="skip">Skip that occurrence</option>
-                    <option value="fail">Fail — create nothing</option>
+                    <option value="next-slot">{{ 'series.resolve.nextSlot' | translate }}</option>
+                    <option value="skip">{{ 'series.resolve.skip' | translate }}</option>
+                    <option value="fail">{{ 'series.resolve.fail' | translate }}</option>
                   </select>
                 </div>
-                <div class="span-2 subtle">{{ repeatSummary() }}@if (resourceIds().length || notes) { <br />Resources and notes apply to single bookings only — add them per occurrence afterwards. }</div>
+                <div class="span-2 subtle">{{ repeatSummary() }}@if (resourceIds().length || notes) { <br />{{ 'booking.seriesNoResources' | translate }} }</div>
               </div>
             }
           </div>
@@ -131,10 +133,10 @@ import { ResourceSelectComponent } from '../../shared/resource-select';
       }
       <div footer>
         @if (result()) {
-          <button type="button" class="btn primary" (click)="finish()">Done</button>
+          <button type="button" class="btn primary" (click)="finish()">{{ 'common.done' | translate }}</button>
         } @else {
-          <button type="button" class="btn" (click)="closed.emit()">Cancel</button>
-          <button type="button" class="btn primary" (click)="book()" [disabled]="!canBook() || saving()">{{ saving() ? 'Booking…' : repeat() ? 'Create series' : 'Book appointment' }}</button>
+          <button type="button" class="btn" (click)="closed.emit()">{{ 'common.cancel' | translate }}</button>
+          <button type="button" class="btn primary" (click)="book()" [disabled]="!canBook() || saving()">{{ (saving() ? 'booking.booking' : repeat() ? 'series.create' : 'booking.book') | translate }}</button>
         }
       </div>
     </cf-dialog>
@@ -155,6 +157,7 @@ export class BookingDialogComponent {
   private readonly seriesApi = inject(SeriesApi);
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
+  readonly lang = inject(LanguageService);
   readonly doctors = input.required<Doctor[]>();
   readonly initialDoctorId = input<string>('');
   readonly initialDate = input<Date | null>(null);
@@ -166,9 +169,8 @@ export class BookingDialogComponent {
 
   readonly types = APPOINTMENT_TYPES;
   readonly frequencies = RECURRENCE_FREQUENCIES;
-  readonly weekdays = WEEKDAYS_SHORT;
+  readonly weekdays = computed(() => this.lang.weekdayNames('short'));
   readonly dayOrder = [1, 2, 3, 4, 5, 6, 0];
-  readonly fmt = fmtDateTime;
   readonly lockDoctor = !!this.auth.doctorId() && !this.auth.hasPermission('appointments:read_all');
   readonly doctorId = signal('');
   readonly date = signal('');
@@ -199,12 +201,15 @@ export class BookingDialogComponent {
   until = '';
   resolve: SeriesResolvePolicy = 'next-slot';
   readonly canBook = computed(() => !!this.patient() && !!this.doctorId() && !!this.selected() && (!this.repeat() || this.repeatValid()));
-  readonly intervalUnit = computed(() => ({ DAILY: 'day(s)', WEEKLY: 'week(s)', MONTHLY: 'month(s)' })[this.frequency()]);
+  readonly intervalUnit = computed(() => this.lang.t(`series.units.${this.frequency()}`));
   readonly repeatSummary = computed(() => {
-    const f = this.frequency(); const every = this.interval > 1 ? `every ${this.interval} ${this.intervalUnit()}` : f.toLowerCase();
-    const on = f === 'WEEKLY' && this.byWeekday().length ? ` on ${this.byWeekday().map((d) => WEEKDAYS_SHORT[d]).join(', ')}` : f === 'MONTHLY' && this.byMonthDay ? ` on day ${this.byMonthDay}` : '';
-    const end = this.endMode() === 'count' ? `${this.count} occurrence(s)` : this.until ? `until ${this.until}` : 'until … (pick a date)';
-    return `Repeats ${every}${on}, ${end}. Conflicts: ${this.resolve === 'next-slot' ? 'moved to the next free slot' : this.resolve === 'skip' ? 'skipped' : 'abort'}.`;
+    const f = this.frequency();
+    const every = this.interval > 1 ? this.lang.t('series.everyN', { n: this.interval, unit: this.intervalUnit() }) : this.lang.enumLabel(f, 'frequency');
+    const on = f === 'WEEKLY' && this.byWeekday().length ? ' ' + this.lang.t('series.onDays', { days: this.byWeekday().map((d) => this.weekdays()[d]).join(this.lang.t('common.listSeparator')) })
+      : f === 'MONTHLY' && this.byMonthDay ? ' ' + this.lang.t('series.onDay', { day: this.byMonthDay }) : '';
+    const end = this.endMode() === 'count' ? this.lang.t('series.occurrencesCount', { n: this.count }) : this.until ? this.lang.t('series.until', { date: this.lang.formatDate(this.until) }) : this.lang.t('series.pickDate');
+    const conflicts = this.lang.t(`series.conflicts.${this.resolve}`);
+    return this.lang.t('series.summary', { every, on, end, conflicts });
   });
 
   ngOnInit() {
@@ -241,7 +246,7 @@ export class BookingDialogComponent {
           if (hit) this.selected.set(hit.startsAt);
         }
       },
-      error: (err) => { this.slotsLoading.set(false); this.slots.set([]); this.slotsError.set(errorMessage(err, 'Availability unavailable')); },
+      error: (err) => { this.slotsLoading.set(false); this.slots.set([]); this.slotsError.set(this.lang.errorMessage(err, this.lang.t('booking.availabilityUnavailable'))); },
     });
   }
 
@@ -255,7 +260,7 @@ export class BookingDialogComponent {
       type: this.type, reason: this.reason || undefined, notes: this.notes || undefined,
       resourceIds: this.resourceIds().length ? this.resourceIds() : undefined,
     }, this.idempotencyKey).subscribe({
-      next: (a) => { this.saving.set(false); this.idempotencyKey = newIdempotencyKey(); this.toast.success('Appointment booked'); this.booked.emit(a); },
+      next: (a) => { this.saving.set(false); this.idempotencyKey = newIdempotencyKey(); this.toast.success(this.lang.t('booking.booked')); this.booked.emit(a); },
       error: (err) => this.onError(err),
     });
   }
@@ -275,7 +280,7 @@ export class BookingDialogComponent {
         this.saving.set(false);
         this.idempotencyKey = newIdempotencyKey();
         this.result.set({ series: r.series, created: r.created ?? [], skipped: r.skipped ?? [] });
-        this.toast.success(`Series created: ${r.created?.length ?? 0} appointment(s)`);
+        this.toast.success(this.lang.t('series.createdToast', { n: r.created?.length ?? 0 }));
       },
       error: (err) => this.onError(err),
     });
@@ -284,8 +289,8 @@ export class BookingDialogComponent {
   private onError(err: unknown) {
     this.saving.set(false);
     if (err instanceof HttpErrorResponse && (err.status === 409 || err.status === 400)) {
-      if (isResourceConflict(err)) this.conflict.set(errorMessage(err));
-      else { this.conflict.set(err.status === 409 ? `This slot was just taken: ${errorMessage(err)}` : errorMessage(err)); if (!this.repeat()) this.loadSlots(); }
+      if (isResourceConflict(err)) this.conflict.set(this.lang.errorMessage(err));
+      else { this.conflict.set(err.status === 409 ? this.lang.t('booking.slotTaken', { message: this.lang.errorMessage(err) }) : this.lang.errorMessage(err)); if (!this.repeat()) this.loadSlots(); }
     } else this.toast.fromError(err);
   }
 

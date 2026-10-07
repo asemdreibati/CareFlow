@@ -2,31 +2,31 @@
   <aside class="sidebar">
     <div class="brand">
       <span class="logo">C</span>
-      <span>CareFlow</span>
+      <span>{{ 'app.name' | translate }}</span>
     </div>
     <nav>
       @for (g of groups(); track g.label) {
-        @if (g.label) { <div class="nav-group">{{ g.label }}</div> }
+        @if (g.label) { <div class="nav-group">{{ g.label | translate }}</div> }
         @for (item of g.items; track item.path) {
           <a [routerLink]="item.path" routerLinkActive="active" (click)="sidebarOpen.set(false)">
-            <span class="ic">{{ item.icon }}</span>{{ item.label }}
+            <span class="ic">{{ item.icon }}</span>{{ item.label | translate }}
           </a>
         }
       }
     </nav>
     <div class="sidebar-footer">
       <div class="small muted">{{ auth.clinic()?.name }}</div>
-      <div class="subtle">{{ auth.role() }}</div>
+      <div class="subtle">{{ lang.enumLabel(auth.role(), 'role') }}</div>
     </div>
   </aside>
   <div class="scrim" (click)="sidebarOpen.set(false)"></div>
 
   <div class="main">
     <header class="topbar">
-      <button type="button" class="btn ghost icon menu-btn" (click)="sidebarOpen.set(!sidebarOpen())" aria-label="Menu">☰</button>
+      <button type="button" class="btn ghost icon menu-btn" (click)="sidebarOpen.set(!sidebarOpen())" [attr.aria-label]="'nav.menu' | translate">☰</button>
       <div class="clinic">
         @if (clinics().length > 1) {
-          <select class="input sm" [value]="auth.clinic()?.id" (change)="switchClinic($event)" [disabled]="switching()">
+          <select class="input sm" [value]="auth.clinic()?.id" (change)="switchClinic($event)" [disabled]="switching()" [attr.aria-label]="'app.clinic' | translate">
             @for (c of clinics(); track c.id) { <option [value]="c.id">{{ c.name }}</option> }
           </select>
         } @else {
@@ -34,6 +34,7 @@
         }
       </div>
       <div class="spacer"></div>
+      <cf-language-switcher />
       <cf-notifications-bell />
       <cf-user-menu />
     </header>

@@ -1,5 +1,6 @@
 import { Component, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
 import { DoctorsApi } from '../../core/api/doctors.api';
 import { ToastService } from '../../core/toast.service';
 import { Doctor } from '../../core/models';
@@ -9,30 +10,30 @@ import { HasPermissionDirective } from '../../core/permission.directive';
 
 @Component({
   selector: 'cf-doctors-list',
-  imports: [RouterLink, PageHeaderComponent, StatusChipComponent, HasPermissionDirective],
+  imports: [RouterLink, TranslatePipe, PageHeaderComponent, StatusChipComponent, HasPermissionDirective],
   template: `
     <div class="page">
-      <cf-page-header title="Doctors" [subtitle]="items().length + ' doctors'">
-        <label class="checkbox"><input type="checkbox" [checked]="includeInactive()" (change)="toggle()" /> Include inactive</label>
-        <a *hasPermission="'doctors:write'" class="btn primary" routerLink="/doctors/new">+ New doctor</a>
+      <cf-page-header [title]="'doctors.title' | translate" [subtitle]="'doctors.count' | translate: { n: items().length }">
+        <label class="checkbox"><input type="checkbox" [checked]="includeInactive()" (change)="toggle()" /> {{ 'common.includeInactive' | translate }}</label>
+        <a *hasPermission="'doctors:write'" class="btn primary" routerLink="/doctors/new">+ {{ 'doctors.new' | translate }}</a>
       </cf-page-header>
       <div class="card">
-        @if (loading()) { <div class="loading"><span class="spinner"></span> Loading…</div> }
+        @if (loading()) { <div class="loading"><span class="spinner"></span> {{ 'common.loading' | translate }}</div> }
         @else {
           <div class="table-wrap">
             <table class="table">
-              <thead><tr><th>Doctor</th><th>Specialty</th><th>License</th><th>Contact</th><th>Login</th><th>Status</th></tr></thead>
+              <thead><tr><th>{{ 'common.doctor' | translate }}</th><th>{{ 'doctors.specialty' | translate }}</th><th>{{ 'doctors.license' | translate }}</th><th>{{ 'doctors.contact' | translate }}</th><th>{{ 'doctors.login' | translate }}</th><th>{{ 'common.status' | translate }}</th></tr></thead>
               <tbody>
                 @for (d of items(); track d.id) {
                   <tr class="clickable" (click)="open(d)">
                     <td><span class="row gap-1"><span class="pill-color" [style.background]="d.color || '#94a3b8'"></span><span class="strong">{{ d.title }} {{ d.firstName }} {{ d.lastName }}</span></span></td>
                     <td>{{ d.specialty }}</td>
                     <td class="mono muted">{{ d.licenseNumber || '—' }}</td>
-                    <td class="muted">{{ d.phone || d.email || '—' }}</td>
-                    <td>{{ d.userId ? 'Linked' : '—' }}</td>
+                    <td class="muted" dir="ltr">{{ d.phone || d.email || '—' }}</td>
+                    <td>{{ d.userId ? ('doctors.linked' | translate) : '—' }}</td>
                     <td><cf-chip [status]="d.isActive" /></td>
                   </tr>
-                } @empty { <tr><td colspan="6" class="empty">No doctors yet.</td></tr> }
+                } @empty { <tr><td colspan="6" class="empty">{{ 'doctors.none' | translate }}</td></tr> }
               </tbody>
             </table>
           </div>

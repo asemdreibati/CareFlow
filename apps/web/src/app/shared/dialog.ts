@@ -1,14 +1,16 @@
 import { Component, HostListener, input, output } from '@angular/core';
+import { TranslatePipe } from '@ngx-translate/core';
 
 /** Simple modal overlay. Parent controls visibility with @if. */
 @Component({
   selector: 'cf-dialog',
+  imports: [TranslatePipe],
   template: `
     <div class="backdrop" (click)="onBackdrop($event)">
       <div class="modal" [style.max-width.px]="width()" role="dialog" aria-modal="true">
         <div class="modal-header">
           <h2>{{ title() }}</h2>
-          <button type="button" class="btn ghost icon sm" (click)="closed.emit()" aria-label="Close">✕</button>
+          <button type="button" class="btn ghost icon sm" (click)="closed.emit()" [attr.aria-label]="'common.close' | translate">✕</button>
         </div>
         <div class="modal-body"><ng-content /></div>
         <div class="modal-footer"><ng-content select="[footer]" /></div>

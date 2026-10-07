@@ -1,42 +1,45 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
 import { AuthService } from '../../core/auth.service';
-import { errorMessage } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { FieldErrorComponent } from '../../shared/field-error';
+import { LanguageSwitcherComponent } from '../../shared/language-switcher';
 import { passwordValidator } from '../../shared/validators';
 
 @Component({
   selector: 'cf-register',
-  imports: [ReactiveFormsModule, RouterLink, FieldErrorComponent],
+  imports: [ReactiveFormsModule, RouterLink, TranslatePipe, FieldErrorComponent, LanguageSwitcherComponent],
   styleUrl: './auth-layout.scss',
   template: `
     <div class="auth">
       <div class="side">
-        <h1>Set up your clinic</h1>
-        <p>Create a clinic workspace and the owner account in one step. You can invite doctors, nurses and staff afterwards.</p>
+        <h1>{{ 'auth.setupTitle' | translate }}</h1>
+        <p>{{ 'auth.setupText' | translate }}</p>
       </div>
       <div class="form-wrap">
+        <div class="lang-corner"><cf-language-switcher /></div>
         <div class="card card-body" style="max-width: 560px">
-          <div class="brand"><span class="logo">C</span>Register a clinic</div>
+          <div class="brand"><span class="logo">C</span>{{ 'auth.registerTitle' | translate }}</div>
           @if (error()) { <div class="inline-alert error">{{ error() }}</div> }
           <form [formGroup]="form" (ngSubmit)="submit()">
-            <h3 class="mb-1">Clinic</h3>
+            <h3 class="mb-1">{{ 'auth.clinic' | translate }}</h3>
             <div class="form-grid">
-              <div class="field"><label class="req">Clinic name</label><input class="input" formControlName="clinicName" (input)="suggestSlug()" /><cf-field-error [control]="form.controls.clinicName" /></div>
-              <div class="field"><label class="req">Slug</label><input class="input" formControlName="slug" placeholder="my-clinic" /><cf-field-error [control]="form.controls.slug" /></div>
-              <div class="field span-2"><label>Timezone</label><input class="input" formControlName="timezone" /></div>
+              <div class="field"><label class="req">{{ 'auth.clinicName' | translate }}</label><input class="input" formControlName="clinicName" (input)="suggestSlug()" /><cf-field-error [control]="form.controls.clinicName" /></div>
+              <div class="field"><label class="req">{{ 'auth.slug' | translate }}</label><input class="input" formControlName="slug" placeholder="my-clinic" dir="ltr" /><cf-field-error [control]="form.controls.slug" /></div>
+              <div class="field span-2"><label>{{ 'auth.timezone' | translate }}</label><input class="input" formControlName="timezone" dir="ltr" /></div>
             </div>
-            <h3 class="mb-1">Owner account</h3>
+            <h3 class="mb-1">{{ 'auth.ownerAccount' | translate }}</h3>
             <div class="form-grid">
-              <div class="field"><label class="req">First name</label><input class="input" formControlName="firstName" /><cf-field-error [control]="form.controls.firstName" /></div>
-              <div class="field"><label class="req">Last name</label><input class="input" formControlName="lastName" /><cf-field-error [control]="form.controls.lastName" /></div>
-              <div class="field span-2"><label class="req">Email</label><input class="input" type="email" formControlName="email" /><cf-field-error [control]="form.controls.email" /></div>
-              <div class="field span-2"><label class="req">Password</label><input class="input" type="password" formControlName="password" autocomplete="new-password" /><cf-field-error [control]="form.controls.password" /></div>
+              <div class="field"><label class="req">{{ 'common.firstName' | translate }}</label><input class="input" formControlName="firstName" /><cf-field-error [control]="form.controls.firstName" /></div>
+              <div class="field"><label class="req">{{ 'common.lastName' | translate }}</label><input class="input" formControlName="lastName" /><cf-field-error [control]="form.controls.lastName" /></div>
+              <div class="field span-2"><label class="req">{{ 'common.email' | translate }}</label><input class="input" type="email" formControlName="email" dir="ltr" /><cf-field-error [control]="form.controls.email" /></div>
+              <div class="field span-2"><label class="req">{{ 'auth.password' | translate }}</label><input class="input" type="password" formControlName="password" autocomplete="new-password" dir="ltr" /><cf-field-error [control]="form.controls.password" /></div>
             </div>
-            <button class="btn primary block" type="submit" [disabled]="loading()">{{ loading() ? 'Creating…' : 'Create clinic' }}</button>
+            <button class="btn primary block" type="submit" [disabled]="loading()">{{ (loading() ? 'common.creating' : 'auth.createClinic') | translate }}</button>
           </form>
-          <p class="mt-2 text-center muted">Already have an account? <a routerLink="/login">Sign in</a></p>
+          <p class="mt-2 text-center muted">{{ 'auth.haveAccount' | translate }} <a routerLink="/login">{{ 'auth.signIn' | translate }}</a></p>
         </div>
       </div>
     </div>
@@ -45,6 +48,7 @@ import { passwordValidator } from '../../shared/validators';
 export class RegisterPage {
   private readonly fb = inject(FormBuilder);
   private readonly auth = inject(AuthService);
+  private readonly lang = inject(LanguageService);
   private readonly router = inject(Router);
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
@@ -57,7 +61,6 @@ export class RegisterPage {
     email: ['', [Validators.required, Validators.email]],
     password: ['', [Validators.required, passwordValidator]],
   });
-  private slugTouched = false;
 
   suggestSlug() {
     if (this.form.controls.slug.dirty) return;
@@ -72,7 +75,7 @@ export class RegisterPage {
     const v = this.form.getRawValue();
     this.auth.register({ ...v, timezone: v.timezone || undefined }).subscribe({
       next: () => void this.router.navigateByUrl('/dashboard'),
-      error: (err) => { this.loading.set(false); this.error.set(errorMessage(err, 'Registration failed')); },
+      error: (err) => { this.loading.set(false); this.error.set(this.lang.errorMessage(err, this.lang.t('auth.registrationFailed'))); },
     });
   }
 }

@@ -63,6 +63,13 @@ export class AuthService {
     return this.http.get<Session>('/api/v1/auth/me').pipe(tap((s) => this.setSession(s)));
   }
 
+  /** Saves the UI language on the staff account (PATCH /auth/me); the local session is updated optimistically. */
+  updateLocale(locale: 'ar' | 'en'): Observable<Session> {
+    const s = this.session();
+    if (s && s.user.locale !== locale) this.setSession({ ...s, user: { ...s.user, locale } });
+    return this.http.patch<Session>('/api/v1/auth/me', { locale }).pipe(tap((updated) => this.setSession(updated)));
+  }
+
   changePassword(currentPassword: string, newPassword: string) {
     return this.http.post<void>('/api/v1/auth/change-password', { currentPassword, newPassword });
   }

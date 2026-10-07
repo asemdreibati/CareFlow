@@ -1,4 +1,5 @@
-import { Component, computed, input } from '@angular/core';
+import { Component, computed, inject, input } from '@angular/core';
+import { LanguageService } from '../core/i18n/language.service';
 
 const COLORS: Record<string, string> = {
   // appointments
@@ -28,13 +29,16 @@ const COLORS: Record<string, string> = {
   template: `<span class="chip" [class]="'chip ' + color()"><span class="dot"></span>{{ label() }}</span>`,
 })
 export class StatusChipComponent {
+  private readonly lang = inject(LanguageService);
   readonly status = input.required<string | boolean | null | undefined>();
   readonly text = input<string>();
+  /** Enum group for the label lookup (`enums.<group>.<VALUE>`); all groups are searched when omitted. */
+  readonly group = input<string>();
   readonly color = computed(() => COLORS[String(this.status()).toUpperCase()] ?? 'gray');
   readonly label = computed(() => {
     if (this.text()) return this.text();
     const s = this.status();
-    if (typeof s === 'boolean') return s ? 'Active' : 'Inactive';
-    return String(s ?? '—').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+    if (typeof s === 'boolean') return this.lang.enumLabel(s ? 'ACTIVE' : 'INACTIVE', 'status');
+    return this.lang.enumLabel(s, this.group());
   });
 }

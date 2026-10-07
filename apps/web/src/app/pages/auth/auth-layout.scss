@@ -3,8 +3,9 @@
 .side { background: linear-gradient(160deg, #0b1324 0%, #0f766e 120%); color: #fff; padding: 48px; display: flex; flex-direction: column; justify-content: center; }
 .side h1 { font-size: 34px; margin-bottom: 12px; letter-spacing: -0.02em; }
 .side p { color: #cbd5e1; font-size: 15px; max-width: 420px; }
-.side ul { color: #cbd5e1; padding-left: 20px; margin-top: 16px; }
-.form-wrap { display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
+.side ul { color: #cbd5e1; padding-inline-start: 20px; margin-top: 16px; }
+.form-wrap { position: relative; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
+.lang-corner { position: absolute; top: 16px; inset-inline-end: 16px; }
 .card { width: 100%; max-width: 440px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; margin-bottom: 24px; }
 .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--cf-primary); color: #fff; display: inline-flex; align-items: center; justify-content: center; }

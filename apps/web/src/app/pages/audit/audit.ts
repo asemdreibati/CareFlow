@@ -1,48 +1,48 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { TranslatePipe } from '@ngx-translate/core';
 import { AuditApi } from '../../core/api/audit.api';
 import { MembersApi } from '../../core/api/members.api';
-import { errorMessage } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { AuditRow, Member } from '../../core/models';
-import { fmtDateTime } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { PaginationComponent } from '../../shared/pagination';
 
 @Component({
   selector: 'cf-audit',
-  imports: [FormsModule, PageHeaderComponent, PaginationComponent],
+  imports: [FormsModule, TranslatePipe, PageHeaderComponent, PaginationComponent],
   template: `
     <div class="page">
-      <cf-page-header title="Audit log" subtitle="Append-only trail of every mutating request" />
+      <cf-page-header [title]="'audit.title' | translate" [subtitle]="'audit.subtitle' | translate" />
       <div class="card">
         <form class="card-header filters" (ngSubmit)="apply()">
-          <input class="input sm" placeholder="Action (e.g. patients.create)" [(ngModel)]="f.action" name="action" />
-          <input class="input sm" placeholder="Entity type" [(ngModel)]="f.entityType" name="entityType" />
-          <input class="input sm" placeholder="Entity ID" [(ngModel)]="f.entityId" name="entityId" />
-          <select class="input sm" [(ngModel)]="f.actorUserId" name="actor"><option value="">Any actor</option>@for (m of members(); track m.id) { <option [value]="m.user.id">{{ m.user.firstName }} {{ m.user.lastName }}</option> }</select>
-          <input class="input sm" type="date" [(ngModel)]="f.from" name="from" />
-          <input class="input sm" type="date" [(ngModel)]="f.to" name="to" />
-          <button class="btn sm primary" type="submit">Filter</button>
-          <button class="btn sm" type="button" (click)="reset()">Reset</button>
+          <input class="input sm" [placeholder]="'audit.actionPlaceholder' | translate" [(ngModel)]="f.action" name="action" dir="ltr" />
+          <input class="input sm" [placeholder]="'audit.entityType' | translate" [(ngModel)]="f.entityType" name="entityType" dir="ltr" />
+          <input class="input sm" [placeholder]="'audit.entityId' | translate" [(ngModel)]="f.entityId" name="entityId" dir="ltr" />
+          <select class="input sm" [(ngModel)]="f.actorUserId" name="actor" [attr.aria-label]="'audit.actor' | translate"><option value="">{{ 'audit.anyActor' | translate }}</option>@for (m of members(); track m.id) { <option [value]="m.user.id">{{ m.user.firstName }} {{ m.user.lastName }}</option> }</select>
+          <input class="input sm" type="date" [(ngModel)]="f.from" name="from" [attr.aria-label]="'common.from' | translate" />
+          <input class="input sm" type="date" [(ngModel)]="f.to" name="to" [attr.aria-label]="'common.to' | translate" />
+          <button class="btn sm primary" type="submit">{{ 'common.filter' | translate }}</button>
+          <button class="btn sm" type="button" (click)="reset()">{{ 'common.reset' | translate }}</button>
         </form>
-        @if (loading()) { <div class="loading"><span class="spinner"></span> Loading…</div> }
+        @if (loading()) { <div class="loading"><span class="spinner"></span> {{ 'common.loading' | translate }}</div> }
         @else if (error()) { <div class="empty">{{ error() }}</div> }
         @else {
           <div class="table-wrap">
             <table class="table">
-              <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th><th>Request</th><th class="num">Status</th><th class="num">ms</th></tr></thead>
+              <thead><tr><th>{{ 'common.when' | translate }}</th><th>{{ 'audit.actor' | translate }}</th><th>{{ 'common.action' | translate }}</th><th>{{ 'audit.entity' | translate }}</th><th>{{ 'audit.request' | translate }}</th><th class="num">{{ 'common.status' | translate }}</th><th class="num">{{ 'audit.ms' | translate }}</th></tr></thead>
               <tbody>
                 @for (r of rows(); track r.id) {
                   <tr>
-                    <td class="nowrap">{{ fmt(r.createdAt) }}</td>
-                    <td class="muted">{{ r.actorEmail || (r.actorUserId ? r.actorUserId.slice(0, 8) : 'system') }}</td>
-                    <td><span class="chip" [class.red]="r.statusCode >= 400" [class.gray]="r.statusCode < 400">{{ r.action }}</span></td>
-                    <td class="muted small">{{ r.entityType || '—' }}@if (r.entityId) { <span class="mono"> {{ r.entityId.slice(0, 8) }}</span> }</td>
-                    <td class="mono small">{{ r.method }} {{ r.path }}</td>
+                    <td class="nowrap">{{ lang.formatDateTime(r.createdAt) }}</td>
+                    <td class="muted" dir="ltr">{{ r.actorEmail || (r.actorUserId ? r.actorUserId.slice(0, 8) : ('audit.system' | translate)) }}</td>
+                    <td><span class="chip" [class.red]="r.statusCode >= 400" [class.gray]="r.statusCode < 400" dir="ltr">{{ r.action }}</span></td>
+                    <td class="muted small" dir="ltr">{{ r.entityType || '—' }}@if (r.entityId) { <span class="mono"> {{ r.entityId.slice(0, 8) }}</span> }</td>
+                    <td class="mono small" dir="ltr">{{ r.method }} {{ r.path }}</td>
                     <td class="num" [class.danger-text]="r.statusCode >= 400">{{ r.statusCode }}</td>
                     <td class="num muted">{{ r.durationMs }}</td>
                   </tr>
-                } @empty { <tr><td colspan="7" class="empty">No audit rows match.</td></tr> }
+                } @empty { <tr><td colspan="7" class="empty">{{ 'audit.none' | translate }}</td></tr> }
               </tbody>
             </table>
           </div>
@@ -56,7 +56,7 @@ import { PaginationComponent } from '../../shared/pagination';
 export class AuditPage {
   private readonly api = inject(AuditApi);
   private readonly membersApi = inject(MembersApi);
-  readonly fmt = fmtDateTime;
+  readonly lang = inject(LanguageService);
   readonly pageSize = 50;
   readonly rows = signal<AuditRow[]>([]);
   readonly total = signal(0);
@@ -80,7 +80,7 @@ export class AuditPage {
       page: this.page(), pageSize: this.pageSize,
     }).subscribe({
       next: (r) => { this.rows.set(r.items ?? []); this.total.set(r.total ?? 0); this.loading.set(false); this.error.set(null); },
-      error: (err) => { this.loading.set(false); this.error.set(errorMessage(err, 'Audit log is not available yet.')); },
+      error: (err) => { this.loading.set(false); this.error.set(this.lang.errorMessage(err, this.lang.t('audit.unavailable'))); },
     });
   }
 }

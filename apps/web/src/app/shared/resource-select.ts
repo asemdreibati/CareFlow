@@ -1,7 +1,8 @@
 import { Component, computed, inject, input, output, signal } from '@angular/core';
+import { TranslatePipe } from '@ngx-translate/core';
+import { LanguageService } from '../core/i18n/language.service';
 import { ResourcesApi } from '../core/api/resources.api';
 import { Resource } from '../core/models';
-import { errorMessage } from '../core/toast.service';
 
 /**
  * Multi-select of clinic resources (rooms, equipment…) rendered as toggle chips.
@@ -9,15 +10,16 @@ import { errorMessage } from '../core/toast.service';
  */
 @Component({
   selector: 'cf-resource-select',
+  imports: [TranslatePipe],
   template: `
-    @if (loading()) { <div class="muted small">Loading resources…</div> }
-    @else if (error()) { <div class="subtle">{{ error() }}</div> }
-    @else if (!resources().length) { <div class="muted small">{{ emptyText() }}</div> }
+    @if (loading()) { <div class="muted small">{{ 'resources.loading' | translate }}</div> }
+    @else if (error()) { <div class="subtle">{{ 'resources.unavailable' | translate: { message: error() } }}</div> }
+    @else if (!resources().length) { <div class="muted small">{{ emptyText() || ('resources.noneDefined' | translate) }}</div> }
     @else {
       <div class="rs">
         @for (r of resources(); track r.id) {
           <button type="button" class="rs-chip" [class.on]="isOn(r.id)" [disabled]="disabled()" (click)="toggle(r.id)" [attr.aria-pressed]="isOn(r.id)">
-            <span class="pill-color" [style.background]="r.color || '#6b7280'"></span>{{ r.name }}<span class="subtle">{{ r.type.toLowerCase() }}</span>
+            <span class="pill-color" [style.background]="r.color || '#6b7280'"></span>{{ r.name }}<span class="subtle">{{ lang.enumLabel(r.type, 'resourceType') }}</span>
           </button>
         }
       </div>
@@ -33,9 +35,11 @@ import { errorMessage } from '../core/toast.service';
 })
 export class ResourceSelectComponent {
   private readonly api = inject(ResourcesApi);
+  readonly lang = inject(LanguageService);
   readonly selected = input<string[]>([]);
   readonly disabled = input(false);
-  readonly emptyText = input('No resources defined yet.');
+  /** Optional override for the empty-state text (defaults to a translated hint). */
+  readonly emptyText = input('');
   readonly selectedChange = output<string[]>();
   readonly resources = signal<Resource[]>([]);
   readonly loading = signal(true);
@@ -45,7 +49,7 @@ export class ResourceSelectComponent {
   constructor() {
     this.api.list().subscribe({
       next: (r) => { this.resources.set(r.filter((x) => x.isActive !== false)); this.loading.set(false); },
-      error: (err) => { this.loading.set(false); this.error.set(`Resources unavailable: ${errorMessage(err)}`); },
+      error: (err) => { this.loading.set(false); this.error.set(this.lang.errorMessage(err)); },
     });
   }
   isOn(id: string) { return this.set().has(id); }

@@ -1,10 +1,12 @@
 import { Component, ElementRef, HostListener, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
 import { AuthService } from '../core/auth.service';
+import { LanguageService } from '../core/i18n/language.service';
 
 @Component({
   selector: 'cf-user-menu',
-  imports: [RouterLink],
+  imports: [RouterLink, TranslatePipe],
   template: `
     <div class="um">
       <button type="button" class="trigger" (click)="open.set(!open())">
@@ -13,9 +15,9 @@ import { AuthService } from '../core/auth.service';
       </button>
       @if (open()) {
         <div class="dropdown">
-          <div class="info"><div class="strong">{{ auth.user()?.firstName }} {{ auth.user()?.lastName }}</div><div class="subtle">{{ auth.user()?.email }} · {{ auth.role() }}</div></div>
-          <a class="item" routerLink="/settings" [queryParams]="{ tab: 'password' }" (click)="open.set(false)">Change password</a>
-          <button type="button" class="item danger-text" (click)="auth.logout()">Log out</button>
+          <div class="info"><div class="strong">{{ auth.user()?.firstName }} {{ auth.user()?.lastName }}</div><div class="subtle">{{ auth.user()?.email }} · {{ lang.enumLabel(auth.role(), 'role') }}</div></div>
+          <a class="item" routerLink="/settings" [queryParams]="{ tab: 'password' }" (click)="open.set(false)">{{ 'settings.changePassword' | translate }}</a>
+          <button type="button" class="item danger-text" (click)="auth.logout()">{{ 'common.logout' | translate }}</button>
         </div>
       }
     </div>
@@ -32,6 +34,7 @@ import { AuthService } from '../core/auth.service';
 })
 export class UserMenuComponent {
   readonly auth = inject(AuthService);
+  readonly lang = inject(LanguageService);
   private readonly host = inject(ElementRef<HTMLElement>);
   readonly open = signal(false);
   readonly initials = computed(() => {

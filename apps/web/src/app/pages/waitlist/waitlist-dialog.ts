@@ -1,8 +1,10 @@
 import { Component, computed, inject, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { TranslatePipe } from '@ngx-translate/core';
 import { WaitlistApi } from '../../core/api/waitlist.api';
 import { clean } from '../../core/api/http-utils';
-import { ToastService, errorMessage } from '../../core/toast.service';
+import { ToastService } from '../../core/toast.service';
+import { LanguageService } from '../../core/i18n/language.service';
 import { APPOINTMENT_TYPES, AppointmentType, Doctor, PatientRef, PreferredWindow, WAITLIST_PRIORITIES, WaitlistEntry, WaitlistPriority } from '../../core/models';
 import { normalizeWindows, validateWindows } from '../../core/scheduling/preferred-windows';
 import { DialogComponent } from '../../shared/dialog';
@@ -11,48 +13,48 @@ import { PreferredWindowsEditorComponent } from '../../shared/preferred-windows-
 
 @Component({
   selector: 'cf-waitlist-dialog',
-  imports: [FormsModule, DialogComponent, PatientSearchComponent, PreferredWindowsEditorComponent],
+  imports: [FormsModule, TranslatePipe, DialogComponent, PatientSearchComponent, PreferredWindowsEditorComponent],
   template: `
-    <cf-dialog title="Add to waitlist" [width]="620" (closed)="closed.emit()">
+    <cf-dialog [title]="'waitlist.add' | translate" [width]="620" (closed)="closed.emit()">
       @if (error()) { <div class="inline-alert error">{{ error() }}</div> }
       <div class="form-grid">
-        <div class="field span-2"><label class="req">Patient</label><cf-patient-search [initial]="initialPatient()" (selectedChange)="patient.set($event)" /></div>
-        <div class="field span-2"><label>Looking for</label>
+        <div class="field span-2"><label class="req">{{ 'common.patient' | translate }}</label><cf-patient-search [initial]="initialPatient()" (selectedChange)="patient.set($event)" /></div>
+        <div class="field span-2"><label>{{ 'waitlist.lookingFor' | translate }}</label>
           <div class="row gap-1 wrap">
             <div class="seg">
-              <button type="button" [class.on]="mode() === 'doctor'" (click)="mode.set('doctor')">Specific doctor</button>
-              <button type="button" [class.on]="mode() === 'specialty'" (click)="mode.set('specialty')">Any doctor of a specialty</button>
+              <button type="button" [class.on]="mode() === 'doctor'" (click)="mode.set('doctor')">{{ 'waitlist.specificDoctor' | translate }}</button>
+              <button type="button" [class.on]="mode() === 'specialty'" (click)="mode.set('specialty')">{{ 'waitlist.anyOfSpecialty' | translate }}</button>
             </div>
             @if (mode() === 'doctor') {
               <select class="input flex-1" style="min-width: 200px" [ngModel]="doctorId()" (ngModelChange)="doctorId.set($event)">
-                <option value="">Select doctor…</option>
+                <option value="">{{ 'doctors.select' | translate }}</option>
                 @for (d of doctors(); track d.id) { <option [value]="d.id">{{ d.title }} {{ d.firstName }} {{ d.lastName }} — {{ d.specialty }}</option> }
               </select>
             } @else {
               <select class="input flex-1" style="min-width: 200px" [ngModel]="specialty()" (ngModelChange)="specialty.set($event)">
-                <option value="">Select specialty…</option>
+                <option value="">{{ 'doctors.selectSpecialty' | translate }}</option>
                 @for (s of specialties(); track s) { <option [value]="s">{{ s }}</option> }
               </select>
             }
           </div>
         </div>
-        <div class="field"><label>Duration</label>
-          <select class="input" [(ngModel)]="durationMinutes">@for (m of [15, 20, 30, 45, 60, 90]; track m) { <option [ngValue]="m">{{ m }} minutes</option> }</select>
+        <div class="field"><label>{{ 'common.duration' | translate }}</label>
+          <select class="input" [(ngModel)]="durationMinutes">@for (m of [15, 20, 30, 45, 60, 90]; track m) { <option [ngValue]="m">{{ lang.formatMinutes(m) }}</option> }</select>
         </div>
-        <div class="field"><label>Priority</label>
-          <select class="input" [(ngModel)]="priority">@for (p of priorities; track p) { <option [value]="p">{{ p.toLowerCase() }}</option> }</select>
+        <div class="field"><label>{{ 'waitlist.priority' | translate }}</label>
+          <select class="input" [(ngModel)]="priority">@for (p of priorities; track p) { <option [value]="p">{{ lang.enumLabel(p, 'priority') }}</option> }</select>
         </div>
-        <div class="field"><label>Type</label>
-          <select class="input" [(ngModel)]="type">@for (t of types; track t) { <option [value]="t">{{ t }}</option> }</select>
+        <div class="field"><label>{{ 'common.type' | translate }}</label>
+          <select class="input" [(ngModel)]="type">@for (t of types; track t) { <option [value]="t">{{ lang.enumLabel(t, 'type') }}</option> }</select>
         </div>
-        <div class="field"><label>Earliest</label><input class="input" type="datetime-local" [(ngModel)]="earliestAt" /></div>
-        <div class="field"><label>Latest <span class="subtle">(optional)</span></label><input class="input" type="datetime-local" [(ngModel)]="latestAt" /></div>
-        <div class="field span-2"><label>Preferred windows</label><cf-preferred-windows [windows]="windows()" (windowsChange)="windows.set($event)" /></div>
-        <div class="field span-2"><label>Notes</label><textarea class="input" rows="2" [(ngModel)]="notes" placeholder="Context for the receptionist…"></textarea></div>
+        <div class="field"><label>{{ 'waitlist.earliest' | translate }}</label><input class="input" type="datetime-local" [(ngModel)]="earliestAt" /></div>
+        <div class="field"><label>{{ 'waitlist.latest' | translate }} <span class="subtle">({{ 'common.optional' | translate }})</span></label><input class="input" type="datetime-local" [(ngModel)]="latestAt" /></div>
+        <div class="field span-2"><label>{{ 'windows.title' | translate }}</label><cf-preferred-windows [windows]="windows()" (windowsChange)="windows.set($event)" /></div>
+        <div class="field span-2"><label>{{ 'common.notes' | translate }}</label><textarea class="input" rows="2" [(ngModel)]="notes" [placeholder]="'waitlist.notesPlaceholder' | translate"></textarea></div>
       </div>
       <div footer>
-        <button type="button" class="btn" (click)="closed.emit()">Cancel</button>
-        <button type="button" class="btn primary" (click)="save()" [disabled]="!valid() || saving()">{{ saving() ? 'Adding…' : 'Add entry' }}</button>
+        <button type="button" class="btn" (click)="closed.emit()">{{ 'common.cancel' | translate }}</button>
+        <button type="button" class="btn primary" (click)="save()" [disabled]="!valid() || saving()">{{ (saving() ? 'waitlist.adding' : 'waitlist.addEntry') | translate }}</button>
       </div>
     </cf-dialog>
   `,
@@ -65,6 +67,7 @@ import { PreferredWindowsEditorComponent } from '../../shared/preferred-windows-
 export class WaitlistDialogComponent {
   private readonly api = inject(WaitlistApi);
   private readonly toast = inject(ToastService);
+  readonly lang = inject(LanguageService);
   readonly doctors = input.required<Doctor[]>();
   readonly initialPatient = input<PatientRef | null>(null);
   readonly closed = output<void>();
@@ -98,8 +101,8 @@ export class WaitlistDialogComponent {
       notes: this.notes.trim(),
     });
     this.api.create(dto as { patientId: string }).subscribe({
-      next: (e) => { this.saving.set(false); this.toast.success('Added to waitlist'); this.saved.emit(e); },
-      error: (err) => { this.saving.set(false); this.error.set(errorMessage(err)); },
+      next: (e) => { this.saving.set(false); this.toast.success(this.lang.t('waitlist.added')); this.saved.emit(e); },
+      error: (err) => { this.saving.set(false); this.error.set(this.lang.errorMessage(err)); },
     });
   }
 }
