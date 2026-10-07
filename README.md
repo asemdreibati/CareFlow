@@ -2,25 +2,28 @@
 
 Multi-tenant clinic management platform: doctors, patients, appointments with
 conflict-free scheduling, medical records, billing, real-time notifications,
-fine-grained permissions, a full audit trail, and an AI assistant layer
-(Claude or Gemini) for patient summaries and SOAP note drafting.
+fine-grained permissions, a full audit trail, a scheduling engine (smart slot
+search, resources, waitlist backfill, recurring series, min-cost rescheduling,
+no-show prediction, reminders), Arabic-aware search, a patient portal with OTP
+login and SMS/WhatsApp/email messaging, an Arabic (RTL) and English UI, and an AI
+assistant layer (Claude or Gemini) for patient summaries, SOAP note drafting and
+"ask the record" with citations.
 
 | Layer | Stack |
 |---|---|
-| API | NestJS 12 · Prisma 6 · PostgreSQL 16 (Row-Level Security) · Socket.IO |
-| Web | Angular 21 (standalone, signals) |
+| API | NestJS 12 · Prisma 6 · PostgreSQL 16 (Row-Level Security, pg_trgm, pgvector) · Socket.IO · Twilio/SMTP |
+| Web | Angular 21 (standalone, signals, ngx-translate, Arabic RTL default) |
 | AI | `@anthropic-ai/sdk` (Claude) · `@google/genai` (Gemini) behind one provider interface |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/API.md](docs/API.md) and
-[docs/SCHEDULING.md](docs/SCHEDULING.md) (the scheduling engine: smart slot search,
-resources, waitlist backfill, recurring series, min-cost rescheduling, no-show
-prediction, reminders).
+[docs/SCHEDULING.md](docs/SCHEDULING.md) (the scheduling engine) and
+[docs/PHASE3.md](docs/PHASE3.md) (search, Arabic/RTL, patient portal, messaging).
 
 ## Quick start
 
 ```bash
 pnpm install
-docker compose up -d db                 # or any PostgreSQL 16 at DATABASE_URL
+docker compose up -d db                 # PostgreSQL 16 with pgvector (or your own; run CREATE EXTENSION vector as superuser)
 cp apps/api/.env.example apps/api/.env  # edit secrets
 pnpm db:migrate                         # applies migrations incl. RLS policies
 pnpm db:seed                            # demo clinic + users (password: Password123)

@@ -73,6 +73,44 @@ reschedule proposals computed by min-cost matching when a doctor takes time off,
 a per-clinic no-show prediction model, a reminder outbox worker, idempotent
 booking and optimistic locking.
 
+## Search
+
+PostgreSQL only, no external search engine. `careflow_normalize()` (migration
+`20261006090000`) folds Arabic diacritics, alef/taa-marbuta/alef-maqsura variants,
+Arabic-Indic digits and Latin accents. `patients.search_text` is maintained by a
+trigger and indexed with `pg_trgm` (substring + `word_similarity` ranking);
+`encounters.search_vector` is a weighted `tsvector` over the SOAP fields with
+highlighted snippets; diagnoses and invoice numbers have trigram indexes. All raw
+SQL runs inside the tenant transaction so RLS applies, with explicit `clinic_id`
+filters and bound parameters. Semantic search uses `pgvector`: signed encounters
+are embedded (de-identified text, Gemini embeddings, 768 dimensions, HNSW cosine
+index) and "ask the record" retrieves the closest encounters of one patient and
+answers with citations through the AI provider.
+
+## Patient portal and messaging
+
+Patients log in per clinic with their phone number and a one-time code (hashed,
+bound to clinic + phone, attempt-limited, no enumeration). The portal JWT has
+`type: "patient"` and is accepted only by `PortalAuthGuard`, which puts
+`clinicId` and `patientId` into the tenant context; staff routes reject it. Portal
+actions reuse the appointment writer, so staff notifications, reminders and
+waitlist backfill behave exactly as for staff-made changes.
+
+`MessagingModule` sends SMS/WhatsApp (Twilio REST) and email (SMTP) through
+provider interfaces, with a log provider for development. Every message is stored
+in `messages`; bilingual templates live in code. Inbound replies arrive on a
+signature-validated webhook: "1 / نعم" confirms and "2 / لا" cancels the next
+appointment. The reminder worker delivers through the same service using the
+clinic's configured channels.
+
+## Localisation
+
+The web app runs in Arabic (RTL, default) and English with runtime switching
+(`@ngx-translate`, bundles under `public/i18n`, logical CSS properties). Staff
+preference is stored in `users.locale`, patient preference in `patients.locale`,
+clinic default in `clinic.settings.defaultLocale`; server-side messages resolve the
+locale in that order.
+
 ## Sensitive data
 
 * Passwords: bcrypt (12 rounds). Refresh tokens: random, stored hashed, rotated on use.
