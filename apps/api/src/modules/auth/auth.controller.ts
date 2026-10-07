@@ -1,9 +1,9 @@
-import { Body, Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Audit, CurrentUser, Public } from '../../common/auth/decorators.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
-import { ChangePasswordDto, LoginDto, RefreshDto, RegisterClinicDto, SwitchClinicDto, UpdateProfileDto } from './auth.dto.js';
+import { ChangePasswordDto, LoginDto, LogoutDto, RefreshDto, RegisterClinicDto, SwitchClinicDto, UpdateProfileDto } from './auth.dto.js';
 import { AuthService } from './auth.service.js';
 
 @ApiTags('auth')
@@ -39,7 +39,7 @@ export class AuthController {
   @Post('logout')
   @HttpCode(204)
   @Audit({ action: 'auth.logout' })
-  async logout(@Body() dto: Partial<RefreshDto>, @CurrentUser() user: AuthUser) {
+  async logout(@Body() dto: LogoutDto, @CurrentUser() user: AuthUser) {
     await this.auth.logout(dto.refreshToken, user.id);
   }
 
@@ -55,6 +55,22 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser() user: AuthUser) {
     return this.auth.me(user);
+  }
+
+  @ApiBearerAuth()
+  @Post('invitations/:id/accept')
+  @HttpCode(200)
+  @Audit({ action: 'auth.acceptInvitation', entity: 'ClinicMembership' })
+  acceptInvitation(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.auth.acceptInvitation(user, id);
+  }
+
+  @ApiBearerAuth()
+  @Post('invitations/:id/decline')
+  @HttpCode(200)
+  @Audit({ action: 'auth.declineInvitation', entity: 'ClinicMembership' })
+  declineInvitation(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.auth.declineInvitation(user, id);
   }
 
   @ApiBearerAuth()

@@ -12,12 +12,12 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_USER: careflow
-          POSTGRES_PASSWORD: careflow
-          POSTGRES_DB: careflow
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U careflow" --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DATABASE_URL: postgresql://careflow:careflow@localhost:5432/careflow?schema=public
       JWT_SECRET: ci-secret-not-for-production
@@ -30,6 +30,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Create the non-superuser application role (RLS applies to it) and install extensions.
+      - run: PGPASSWORD=postgres psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f infra/db/init.sql
       - run: pnpm --filter api exec prisma migrate deploy
       - run: pnpm --filter api lint
       - run: pnpm --filter api exec tsc -p tsconfig.build.json --noEmit

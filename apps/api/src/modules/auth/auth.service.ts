@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import type { ClinicMembership, Role, User } from '@prisma/client';
@@ -24,9 +24,19 @@ export interface SessionInfo {
   doctorId?: string;
   permissions: string[];
   clinics: { id: string; name: string; slug: string; role: Role }[];
+  /** Pending invitations to other clinics that this user can accept or decline. */
+  invitations: { id: string; clinic: { id: string; name: string }; role: Role; invitedAt: Date }[];
 }
 
 const BCRYPT_ROUNDS = 12;
+/**
+ * A real bcrypt hash compared against when the email is unknown, so a failed login
+ * costs the same time whether or not the account exists (bcryptjs returns instantly
+ * for malformed hashes).
+ */
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('careflow-timing-equaliser', BCRYPT_ROUNDS);
+/** Grace period during which re-presenting a just-rotated refresh token is treated as a client race, not theft. */
+const REFRESH_REUSE_GRACE_MS = 60_000;
 
 function parseDurationMs(value: string): number {
   const m = /^(\d+)([smhd])$/.exec(value);
@@ -62,7 +72,7 @@ export class AuthService {
           data: { email, passwordHash, firstName: dto.firstName, lastName: dto.lastName },
         });
         const membership = await tx.clinicMembership.create({
-          data: { clinicId: clinic.id, userId: user.id, role: 'OWNER' },
+          data: { clinicId: clinic.id, userId: user.id, role: 'OWNER', acceptedAt: new Date() },
           include: { clinic: true },
         });
         return { user, membership };
@@ -76,11 +86,11 @@ export class AuthService {
     const user = await tenantContext.runSystem(() =>
       this.prisma.db.user.findUnique({
         where: { email },
-        include: { memberships: { where: { isActive: true, clinic: { isActive: true } } } },
+        include: { memberships: { where: { isActive: true, acceptedAt: { not: null }, clinic: { isActive: true } } } },
       }),
     );
     // Constant-time-ish: always run bcrypt even when the user does not exist.
-    const ok = await bcrypt.compare(dto.password, user?.passwordHash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinv');
+    const ok = await bcrypt.compare(dto.password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
     if (!user || !ok || !user.isActive) throw new UnauthorizedException('Invalid credentials');
     if (user.memberships.length === 0) throw new UnauthorizedException('No active clinic membership');
 
@@ -99,16 +109,24 @@ export class AuthService {
     const stored = await tenantContext.runSystem(() =>
       this.prisma.db.refreshToken.findUnique({ where: { tokenHash }, include: { user: true } }),
     );
+    if (stored?.revokedAt && Date.now() - stored.revokedAt.getTime() > REFRESH_REUSE_GRACE_MS) {
+      // A token rotated long ago is being replayed: assume it was stolen and end every session of the user.
+      await tenantContext.runSystem(() =>
+        this.prisma.db.refreshToken.updateMany({ where: { userId: stored.userId, revokedAt: null }, data: { revokedAt: new Date() } }),
+      );
+    }
     if (!stored || stored.revokedAt || stored.expiresAt < new Date() || !stored.user.isActive) {
       throw new UnauthorizedException('Refresh token is invalid or expired');
     }
     const [, clinicId] = refreshToken.split('.'); // token = <random>.<clinicId>
     if (!clinicId) throw new UnauthorizedException('Malformed refresh token');
 
-    // Rotate: revoke the used token, issue a new pair.
-    await tenantContext.runSystem(() =>
-      this.prisma.db.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } }),
+    // Rotate atomically: only one concurrent request can claim (revoke) this token;
+    // the others see count === 0 and are rejected, so a token cannot be forked.
+    const claimed = await tenantContext.runSystem(() =>
+      this.prisma.db.refreshToken.updateMany({ where: { id: stored.id, revokedAt: null }, data: { revokedAt: new Date() } }),
     );
+    if (claimed.count !== 1) throw new UnauthorizedException('Refresh token is invalid or expired');
     return this.issueSession(stored.user, clinicId);
   }
 
@@ -128,7 +146,7 @@ export class AuthService {
   async switchClinic(user: AuthUser, clinicId: string): Promise<{ tokens: TokenPair; session: SessionInfo }> {
     const dbUser = await tenantContext.runSystem(() => this.prisma.db.user.findUniqueOrThrow({ where: { id: user.id } }));
     const membership = await tenantContext.runSystem(() =>
-      this.prisma.db.clinicMembership.findFirst({ where: { userId: user.id, clinicId, isActive: true } }),
+      this.prisma.db.clinicMembership.findFirst({ where: { userId: user.id, clinicId, isActive: true, acceptedAt: { not: null } } }),
     );
     if (!membership) throw new UnauthorizedException('Not a member of the requested clinic');
     return this.issueSession(dbUser, clinicId);
@@ -137,6 +155,27 @@ export class AuthService {
   async me(user: AuthUser): Promise<SessionInfo> {
     const dbUser = await tenantContext.runSystem(() => this.prisma.db.user.findUniqueOrThrow({ where: { id: user.id } }));
     return this.buildSession(dbUser, user.clinicId);
+  }
+
+  /** Accept a pending invitation: the membership becomes active and appears in the clinic switcher. */
+  async acceptInvitation(user: AuthUser, membershipId: string): Promise<SessionInfo> {
+    const res = await tenantContext.runSystem(() =>
+      this.prisma.db.clinicMembership.updateMany({
+        where: { id: membershipId, userId: user.id, acceptedAt: null },
+        data: { acceptedAt: new Date(), isActive: true },
+      }),
+    );
+    if (res.count !== 1) throw new NotFoundException('Invitation not found');
+    return this.me(user);
+  }
+
+  /** Decline a pending invitation (the pending membership is removed). */
+  async declineInvitation(user: AuthUser, membershipId: string): Promise<SessionInfo> {
+    const res = await tenantContext.runSystem(() =>
+      this.prisma.db.clinicMembership.deleteMany({ where: { id: membershipId, userId: user.id, acceptedAt: null } }),
+    );
+    if (res.count !== 1) throw new NotFoundException('Invitation not found');
+    return this.me(user);
   }
 
   /** Profile fields the user may change about themselves (UI language, name, phone). */
@@ -180,8 +219,13 @@ export class AuthService {
   private async buildSession(user: User, clinicId: string): Promise<SessionInfo> {
     return tenantContext.runSystem(async () => {
       const memberships = await this.prisma.db.clinicMembership.findMany({
-        where: { userId: user.id, isActive: true, clinic: { isActive: true } },
+        where: { userId: user.id, isActive: true, acceptedAt: { not: null }, clinic: { isActive: true } },
         include: { clinic: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      const pending = await this.prisma.db.clinicMembership.findMany({
+        where: { userId: user.id, acceptedAt: null, clinic: { isActive: true } },
+        include: { clinic: { select: { id: true, name: true } } },
         orderBy: { createdAt: 'asc' },
       });
       const active = memberships.find((m) => m.clinicId === clinicId) as (ClinicMembership & { clinic: { id: string; name: string; slug: string; timezone: string; currency: string } }) | undefined;
@@ -203,6 +247,7 @@ export class AuthService {
         doctorId: doctor?.id,
         permissions: [...resolvePermissions(active.role, active.extraPermissions)],
         clinics: memberships.map((m) => ({ id: m.clinic.id, name: m.clinic.name, slug: m.clinic.slug, role: m.role })),
+        invitations: pending.map((m) => ({ id: m.id, clinic: m.clinic, role: m.role, invitedAt: m.createdAt })),
       };
     });
   }

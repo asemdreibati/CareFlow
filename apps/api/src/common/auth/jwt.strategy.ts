@@ -15,11 +15,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private readonly prisma: PrismaService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromExtractors([
-        ExtractJwt.fromAuthHeaderAsBearerToken(),
-        // WebSocket handshakes and some tooling pass the token as a query param.
-        ExtractJwt.fromUrlQueryParameter('token'),
-      ]),
+      // Header only: tokens in URLs end up in proxy logs and audit paths. The WebSocket
+      // gateway authenticates its handshake separately.
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: config.get('jwtSecret', { infer: true }),
     });
@@ -35,14 +33,22 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
     if (payload.type !== 'access') throw new UnauthorizedException('Invalid token type');
 
-    const membership = await tenantContext.runSystem(() =>
-      this.prisma.db.clinicMembership.findFirst({
-        where: { userId: payload.sub, clinicId: payload.clinicId, isActive: true },
-        include: {
-          user: { select: { isActive: true, email: true } },
-          clinic: { select: { isActive: true } },
-        },
-      }),
+    const [membership, doctor] = await tenantContext.runSystem(() =>
+      Promise.all([
+        this.prisma.db.clinicMembership.findFirst({
+          where: { userId: payload.sub, clinicId: payload.clinicId, isActive: true, acceptedAt: { not: null } },
+          include: {
+            user: { select: { isActive: true, email: true } },
+            clinic: { select: { isActive: true } },
+          },
+        }),
+        // The doctor profile is resolved fresh on every request (never trusted from the
+        // token) so unlinking or deactivating a profile takes effect immediately.
+        this.prisma.db.doctor.findFirst({
+          where: { clinicId: payload.clinicId, userId: payload.sub, isActive: true },
+          select: { id: true },
+        }),
+      ]),
     );
     if (!membership || !membership.user.isActive || !membership.clinic.isActive) {
       throw new UnauthorizedException('Membership is no longer active');
@@ -53,7 +59,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: membership.user.email,
       clinicId: payload.clinicId,
       role: membership.role,
-      doctorId: payload.doctorId,
+      doctorId: doctor?.id,
       permissions: resolvePermissions(membership.role, membership.extraPermissions),
     };
 

@@ -29,6 +29,6 @@ export class ClinicsController {
   @RequirePermissions(Permission.ClinicRead)
   stats(@CurrentUser() user: AuthUser) {
     const restrictToOwn = user.role === 'DOCTOR' && !user.permissions.has(Permission.AppointmentsReadAll);
-    return this.clinics.stats(user.clinicId, restrictToOwn ? user.doctorId : undefined);
+    return this.clinics.stats(user.clinicId, { ownOnly: restrictToOwn, doctorId: user.doctorId });
   }
 }

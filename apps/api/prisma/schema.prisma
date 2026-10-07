@@ -89,6 +89,10 @@ model ClinicMembership {
   role             Role
   extraPermissions String[] @default([]) @map("extra_permissions")
   isActive         Boolean  @default(true) @map("is_active")
+  /// Null while an invitation to an EXISTING account is pending: the invited user must accept
+  /// it (POST /auth/invitations/:id/accept) before the membership becomes active.
+  acceptedAt       DateTime? @map("accepted_at") @db.Timestamptz
+  invitedById      String?   @map("invited_by_id") @db.Uuid
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -565,6 +569,8 @@ model AuditLog {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   clinicId    String?  @map("clinic_id") @db.Uuid
   actorUserId String?  @map("actor_user_id") @db.Uuid
+  /// Set when the actor is a patient using the portal.
+  actorPatientId String? @map("actor_patient_id") @db.Uuid
   actorEmail  String?  @map("actor_email")
   action      String // e.g. appointments.create
   entityType  String?  @map("entity_type")

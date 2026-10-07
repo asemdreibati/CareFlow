@@ -53,6 +53,7 @@ export class AuditService {
     const data: Prisma.AuditLogUncheckedCreateInput = {
       clinicId: ctx?.clinicId,
       actorUserId: ctx?.userId,
+      actorPatientId: ctx?.patientId,
       actorEmail: ctx?.email,
       action: entry.action,
       entityType: entry.entityType,

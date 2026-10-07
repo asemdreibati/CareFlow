@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser, RequirePermissions } from '../../common/auth/decorators.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
@@ -37,5 +37,13 @@ export class MembersController {
   @Audit({ action: 'members.update', entity: 'ClinicMembership' })
   update(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateMemberDto) {
     return this.members.update(user, id, dto);
+  }
+
+  @Delete(':id/invitation')
+  @HttpCode(204)
+  @RequirePermissions(Permission.MembersManage)
+  @Audit({ action: 'members.revokeInvitation', entity: 'ClinicMembership' })
+  async revokeInvitation(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    await this.members.revokeInvitation(user, id);
   }
 }

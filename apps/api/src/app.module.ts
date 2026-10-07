@@ -3,7 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { AuditedThrottlerGuard } from './common/auth/audited-throttler.guard.js';
 import { CommonModule } from './common/common.module.js';
 import { PrismaModule } from './common/prisma/prisma.module.js';
 import { RequestContextMiddleware } from './common/tenancy/request-context.middleware.js';
@@ -56,7 +57,7 @@ import { WaitlistModule } from './modules/waitlist/waitlist.module.js';
     PortalModule,
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [{ provide: APP_GUARD, useClass: AuditedThrottlerGuard }],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

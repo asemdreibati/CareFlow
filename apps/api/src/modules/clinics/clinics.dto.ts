@@ -1,8 +1,9 @@
+import { IsTimeZone } from '../../common/validation/is-time-zone.js';
 import { IsEmail, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateClinicDto {
   @IsOptional() @IsString() @MaxLength(120) name?: string;
-  @IsOptional() @IsString() timezone?: string;
+  @IsOptional() @IsTimeZone() timezone?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsString() address?: string;

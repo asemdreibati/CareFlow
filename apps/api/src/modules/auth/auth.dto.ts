@@ -1,3 +1,4 @@
+import { IsTimeZone } from '../../common/validation/is-time-zone.js';
 import { IsEmail, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class LoginDto {
@@ -27,7 +28,7 @@ export class RegisterClinicDto {
   @IsString() @IsNotEmpty() @MaxLength(120) clinicName: string;
   @IsString() @Matches(/^[a-z0-9-]{3,40}$/, { message: 'slug must be 3-40 lowercase letters, digits or dashes' })
   slug: string;
-  @IsOptional() @IsString() timezone?: string;
+  @IsOptional() @IsTimeZone() timezone?: string;
   @IsEmail() email: string;
   @IsString() @MinLength(10) @MaxLength(128)
   @Matches(/[A-Z]/, { message: 'password must contain an uppercase letter' })
@@ -42,4 +43,8 @@ export class UpdateProfileDto {
   @IsOptional() @IsString() @IsNotEmpty() firstName?: string;
   @IsOptional() @IsString() @IsNotEmpty() lastName?: string;
   @IsOptional() @IsString() phone?: string;
+}
+
+export class LogoutDto {
+  @IsOptional() @IsString() @IsNotEmpty() refreshToken?: string;
 }

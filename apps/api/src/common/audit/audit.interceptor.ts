@@ -5,7 +5,24 @@ import { Observable, tap } from 'rxjs';
 import { AUDIT_KEY, type AuditOptions } from '../auth/decorators.js';
 import { AuditService } from './audit.service.js';
 
-const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+export const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+const SECRET_QUERY_PARAMS = new Set(['token', 'access_token', 'accesstoken', 'refreshtoken', 'refresh_token', 'code', 'otp']);
+
+/** Request path for audit rows, with credential-like query parameters removed. */
+export function auditPath(originalUrl: string): string {
+  const q = originalUrl.indexOf('?');
+  if (q < 0) return originalUrl;
+  const params = new URLSearchParams(originalUrl.slice(q + 1));
+  for (const key of Array.from(params.keys())) if (SECRET_QUERY_PARAMS.has(key.toLowerCase())) params.set(key, '[REDACTED]');
+  const query = params.toString();
+  return query ? `${originalUrl.slice(0, q)}?${query}` : originalUrl.slice(0, q);
+}
+
+/** Default audit action name: `<controller>.<handler>`. */
+export function auditActionName(context: ExecutionContext, options?: AuditOptions): string {
+  return options?.action ?? `${context.getClass().name.replace(/Controller$/, '').toLowerCase()}.${context.getHandler().name}`;
+}
 
 /**
  * Global interceptor: records every mutating request (and any read explicitly
@@ -30,9 +47,7 @@ export class AuditInterceptor implements NestInterceptor {
     if (!shouldAudit) return next.handle();
 
     const started = Date.now();
-    const action =
-      options?.action ??
-      `${context.getClass().name.replace(/Controller$/, '').toLowerCase()}.${context.getHandler().name}`;
+    const action = auditActionName(context, options);
     const entityIdFromRoute = (req.params as Record<string, string | undefined>)?.id;
 
     return next.handle().pipe(
@@ -47,7 +62,7 @@ export class AuditInterceptor implements NestInterceptor {
             entityType: options?.entity,
             entityId,
             method: req.method,
-            path: req.originalUrl,
+            path: auditPath(req.originalUrl),
             statusCode: res.statusCode,
             requestBody: req.body,
             durationMs: Date.now() - started,
@@ -59,7 +74,7 @@ export class AuditInterceptor implements NestInterceptor {
             entityType: options?.entity,
             entityId: entityIdFromRoute,
             method: req.method,
-            path: req.originalUrl,
+            path: auditPath(req.originalUrl),
             statusCode: typeof err?.status === 'number' ? err.status : 500,
             requestBody: req.body,
             durationMs: Date.now() - started,
