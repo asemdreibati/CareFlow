@@ -3,7 +3,7 @@ import type { Notification, NotificationType, Prisma } from '@prisma/client';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { tenantContext } from '../../common/tenancy/tenant-context.js';
-import { NotificationsGateway } from './notifications.gateway.js';
+import { NotificationsGateway, activeMembershipWhere } from './notifications.gateway.js';
 
 export interface NotifyInput {
   type: NotificationType;
@@ -29,18 +29,26 @@ export class NotificationsService {
   ) {}
 
   /**
-   * Single entry point for creating notifications: one row per distinct user,
-   * persisted, then pushed over Socket.IO to each user's room together with the
-   * fresh unread count. Returns the created rows.
+   * Single entry point for creating notifications: one row per distinct user who
+   * is still an ACTIVE member of the clinic (revoked members, pending invitations
+   * and deactivated users are dropped), persisted, then pushed over Socket.IO to
+   * each user's room for that clinic together with the fresh unread count.
+   * Returns the created rows.
    */
   async notify(userIds: readonly string[], input: NotifyInput): Promise<Notification[]> {
-    const recipients = [...new Set(userIds.filter((id): id is string => typeof id === 'string' && id.length > 0))];
-    if (recipients.length === 0) return [];
+    const requested = [...new Set(userIds.filter((id): id is string => typeof id === 'string' && id.length > 0))];
+    if (requested.length === 0) return [];
     const clinicId = input.clinicId ?? tenantContext.get()?.clinicId;
     if (!clinicId) {
       this.logger.warn(`notify(${input.type}) called without a clinic context; dropped`);
       return [];
     }
+    const members = await this.inClinic(clinicId, () =>
+      this.prisma.db.clinicMembership.findMany({ where: { ...activeMembershipWhere(clinicId), userId: { in: requested } }, select: { userId: true } }),
+    );
+    const active = new Set(members.map((m) => m.userId));
+    const recipients = requested.filter((id) => active.has(id));
+    if (recipients.length === 0) return [];
 
     const rows = await this.inClinic(clinicId, () =>
       this.prisma.db.notification.createManyAndReturn({
@@ -59,7 +67,7 @@ export class NotificationsService {
     await Promise.all(
       recipients.map(async (userId) => {
         const count = await this.inClinic(clinicId, () => this.unreadCount(clinicId, userId));
-        this.gateway.pushUnreadCount(userId, count);
+        this.gateway.pushUnreadCount(clinicId, userId, count);
       }),
     );
     return rows;
@@ -80,7 +88,7 @@ export class NotificationsService {
     if (!row) throw new NotFoundException('Notification not found');
     const updated = row.readAt ? row : await this.prisma.db.notification.update({ where: { id }, data: { readAt: new Date() } });
     const count = await this.unreadCount(user.clinicId, user.id);
-    this.gateway.pushUnreadCount(user.id, count);
+    this.gateway.pushUnreadCount(user.clinicId, user.id, count);
     return updated;
   }
 
@@ -89,7 +97,7 @@ export class NotificationsService {
       where: { clinicId: user.clinicId, userId: user.id, readAt: null },
       data: { readAt: new Date() },
     });
-    this.gateway.pushUnreadCount(user.id, 0);
+    this.gateway.pushUnreadCount(user.clinicId, user.id, 0);
     return { updated: result.count, unreadCount: 0 };
   }
 

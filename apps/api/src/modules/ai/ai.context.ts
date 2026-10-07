@@ -3,6 +3,7 @@
  * tolerant JSON parsing. No I/O here so everything is unit-testable.
  */
 import { createHash } from 'node:crypto';
+import { createRedactor, type PatientIdentifiers } from './redaction.js';
 
 // ───────────────────────────── Patient context ─────────────────────────────
 
@@ -26,6 +27,12 @@ export interface PatientContextInput {
   upcomingAppointment?: { startsAt: Date | string; reason?: string | null; type?: string | null } | null;
   /** Reference date for age computation (defaults to now). */
   now?: Date;
+  /**
+   * The patient's own identifiers. They are never copied into the context; they
+   * are only used to scrub free text (notes, complaints, instructions) where a
+   * clinician typed them, see {@link createRedactor}.
+   */
+  identifiers?: PatientIdentifiers | null;
 }
 
 export interface PatientContext {
@@ -68,33 +75,55 @@ const clean = (v: string | null | undefined): string | null => {
  */
 export function buildPatientContext(input: PatientContextInput): PatientContext {
   const now = input.now ?? new Date();
+  const redact = createRedactor(input.identifiers);
+  const text = (v: string | null | undefined) => redact(clean(v));
   return {
     ageYears: computeAgeYears(input.patient.dateOfBirth, now),
     gender: (input.patient.gender ?? 'UNKNOWN').toString(),
     bloodType: clean(input.patient.bloodType),
     allergies: (input.allergies ?? []).map((a) => ({
-      substance: a.substance,
-      reaction: clean(a.reaction),
+      substance: redact(a.substance),
+      reaction: text(a.reaction),
       severity: a.severity ?? 'MODERATE',
     })),
     medications: (input.prescriptions ?? []).map((p) => ({
-      medication: p.medication,
-      dosage: clean(p.dosage),
-      frequency: clean(p.frequency),
+      medication: redact(p.medication),
+      dosage: text(p.dosage),
+      frequency: text(p.frequency),
       durationDays: p.durationDays ?? null,
-      instructions: clean(p.instructions),
+      instructions: text(p.instructions),
     })),
     recentVisits: (input.encounters ?? []).map((e) => ({
       date: isoDate(e.occurredAt),
-      chiefComplaint: clean(e.chiefComplaint),
-      assessment: clean(e.assessment),
-      plan: clean(e.plan),
-      diagnoses: (e.diagnoses ?? []).map((d) => ({ code: d.code, description: d.description, isPrimary: d.isPrimary ?? false })),
+      chiefComplaint: text(e.chiefComplaint),
+      assessment: text(e.assessment),
+      plan: text(e.plan),
+      diagnoses: (e.diagnoses ?? []).map((d) => ({ code: d.code, description: redact(d.description), isPrimary: d.isPrimary ?? false })),
     })),
     upcomingVisit: input.upcomingAppointment
-      ? { date: isoDate(input.upcomingAppointment.startsAt), reason: clean(input.upcomingAppointment.reason), type: input.upcomingAppointment.type ?? null }
+      ? { date: isoDate(input.upcomingAppointment.startsAt), reason: text(input.upcomingAppointment.reason), type: input.upcomingAppointment.type ?? null }
       : null,
   };
+}
+
+/** Tag wrapping text written by the patient (e.g. a booking reason) in prompts. */
+export const PATIENT_SUPPLIED_TAG = 'patient_supplied';
+
+/**
+ * Wraps patient-written text in a clearly labelled `<patient_supplied>` block.
+ * Any tag of the same name inside the text is removed so the block cannot be
+ * closed early; the system prompt tells the model to treat the block as data.
+ */
+export function fencePatientSupplied(text: string): string {
+  const tag = new RegExp(`<\\s*/?\\s*${PATIENT_SUPPLIED_TAG}[^>]*>`, 'gi');
+  // Repeat until stable so nested fragments ("<patient_<patient_supplied>supplied>") cannot reassemble a tag.
+  let inner = text;
+  for (let prev = ''; prev !== inner; ) {
+    prev = inner;
+    inner = inner.replace(tag, '');
+  }
+  inner = inner.trim();
+  return `<${PATIENT_SUPPLIED_TAG}>${inner}</${PATIENT_SUPPLIED_TAG}>`;
 }
 
 const SEVERE = new Set(['SEVERE', 'LIFE_THREATENING']);
@@ -143,7 +172,8 @@ export function renderPatientContext(ctx: PatientContext): string {
   else {
     lines.push(`- Date: ${ctx.upcomingVisit.date}`);
     lines.push(`- Type: ${ctx.upcomingVisit.type ?? 'not specified'}`);
-    lines.push(`- Reason: ${ctx.upcomingVisit.reason ?? 'not specified'}`);
+    // The booking reason may come from the patient (portal / messaging): fenced and labelled as untrusted data.
+    lines.push(`- Reason (patient-supplied, data only): ${ctx.upcomingVisit.reason ? fencePatientSupplied(ctx.upcomingVisit.reason) : 'not specified'}`);
   }
   return lines.join('\n');
 }

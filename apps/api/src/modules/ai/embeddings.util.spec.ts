@@ -101,3 +101,23 @@ describe('chunk', () => {
     expect(() => chunk([1], 0)).toThrow(RangeError);
   });
 });
+
+describe('buildEncounterEmbeddingText redaction', () => {
+  it("replaces the patient's own identifiers typed into the free text", () => {
+    const text = buildEncounterEmbeddingText(
+      {
+        occurredAt: '2026-09-01T09:00:00Z',
+        chiefComplaint: 'Zelda reports headache',
+        subjective: 'Call Zelda Quartermain at +966501234567 or zelda.q@example.com',
+        assessment: 'MRN-000042 national id 9876543210',
+        diagnoses: [{ code: 'R51', description: 'Headache (Quartermain family)' }],
+      },
+      { firstName: 'Zelda', lastName: 'Quartermain', phone: '0501234567', email: 'zelda.q@example.com', mrn: 'MRN-000042', nationalId: '9876543210' },
+    );
+    for (const leak of ['Zelda', 'Quartermain', '501234567', 'zelda.q@example.com', 'MRN-000042', '9876543210']) expect(text).not.toContain(leak);
+    expect(text).toContain('Chief complaint: [PATIENT] reports headache');
+    expect(text).toContain('Subjective: Call [PATIENT] at [PHONE] or [EMAIL]');
+    expect(text).toContain('Assessment: [MRN] national id [NATIONAL_ID]');
+    expect(text).toContain('Diagnoses: R51 Headache ([PATIENT] family)');
+  });
+});

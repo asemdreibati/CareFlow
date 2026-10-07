@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { EMBEDDING_PROVIDER_TOKEN, embeddingsEnabled, type EmbeddingProvider } from './embedding-provider.js';
 import { buildEncounterEmbeddingText, chunk, hashEmbeddingText, normalizeVector, toVectorLiteral } from './embeddings.util.js';
+import type { PatientIdentifiers } from './redaction.js';
 
 /** Encounters embedded per provider call during a backfill. */
 const BACKFILL_BATCH = 16;
@@ -22,6 +24,8 @@ const embeddingSelect = {
   plan: true,
   diagnoses: { select: { code: true, description: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { code: 'asc' }] },
   embedding: { select: { contentHash: true, model: true } },
+  // Read only to scrub the patient's own identifiers out of the free text; never embedded.
+  patient: { select: { firstName: true, lastName: true, phone: true, email: true, mrn: true, nationalIdEnc: true } },
 } satisfies Prisma.EncounterSelect;
 
 type EmbeddableEncounter = Prisma.EncounterGetPayload<{ select: typeof embeddingSelect }>;
@@ -56,6 +60,7 @@ export class EmbeddingsService {
   constructor(
     @Inject(EMBEDDING_PROVIDER_TOKEN) private readonly provider: EmbeddingProvider,
     private readonly prisma: PrismaService,
+    private readonly crypto: FieldEncryptionService,
   ) {}
 
   get enabled(): boolean {
@@ -75,7 +80,7 @@ export class EmbeddingsService {
     if (!this.enabled) return 'skipped';
     const encounter = await this.prisma.db.encounter.findFirst({ where: { id: encounterId, clinicId }, select: embeddingSelect });
     if (!encounter || !INDEXED_STATUSES.includes(encounter.status as (typeof INDEXED_STATUSES)[number])) return 'skipped';
-    const text = buildEncounterEmbeddingText(encounter);
+    const text = this.embeddingText(encounter);
     const hash = hashEmbeddingText(text);
     if (this.isCurrent(encounter, hash)) return 'unchanged';
     const [vector] = await this.provider.embed([text], 'RETRIEVAL_DOCUMENT');
@@ -96,7 +101,7 @@ export class EmbeddingsService {
 
     const pending: { encounter: EmbeddableEncounter; text: string; hash: string }[] = [];
     for (const encounter of encounters) {
-      const text = buildEncounterEmbeddingText(encounter);
+      const text = this.embeddingText(encounter);
       const hash = hashEmbeddingText(text);
       if (this.isCurrent(encounter, hash)) result.unchanged += 1;
       else pending.push({ encounter, text, hash });
@@ -133,12 +138,29 @@ export class EmbeddingsService {
     return normalizeVector(vector);
   }
 
+  /** The patient's own identifiers, used only to redact them from text sent to a provider. */
+  patientIdentifiers(patient: { firstName: string; lastName: string; phone: string | null; email: string | null; mrn: string; nationalIdEnc: string | null }): PatientIdentifiers {
+    let nationalId: string | null = null;
+    try {
+      nationalId = this.crypto.decrypt(patient.nationalIdEnc);
+    } catch {
+      nationalId = null; // undecryptable (rotated key): nothing to redact with
+    }
+    return { firstName: patient.firstName, lastName: patient.lastName, phone: patient.phone, email: patient.email, mrn: patient.mrn, nationalId };
+  }
+
+  private embeddingText(encounter: EmbeddableEncounter): string {
+    return buildEncounterEmbeddingText(encounter, this.patientIdentifiers(encounter.patient));
+  }
+
   /**
    * Nearest signed encounters of ONE patient by cosine distance. The clinic and
-   * patient filters are explicit on top of RLS.
+   * patient filters are explicit on top of RLS. `doctorId` restricts the search
+   * to one author's encounters (own-only doctors).
    */
-  async similarEncounters(clinicId: string, patientId: string, queryVector: number[], limit: number): Promise<SimilarEncounter[]> {
+  async similarEncounters(clinicId: string, patientId: string, queryVector: number[], limit: number, doctorId?: string): Promise<SimilarEncounter[]> {
     const literal = toVectorLiteral(queryVector);
+    const byDoctor = doctorId ? Prisma.sql`AND e.doctor_id = ${doctorId}::uuid` : Prisma.empty;
     const rows = await this.prisma.transaction((tx) =>
       tx.$queryRaw<{ id: string; distance: number }[]>`
         SELECT e.id, (ee.embedding <=> ${literal}::vector)::float8 AS distance
@@ -149,6 +171,7 @@ export class EmbeddingsService {
           AND e.clinic_id = ${clinicId}::uuid
           AND e.patient_id = ${patientId}::uuid
           AND e.status IN ('SIGNED', 'AMENDED')
+          ${byDoctor}
         ORDER BY ee.embedding <=> ${literal}::vector
         LIMIT ${limit}`,
     );

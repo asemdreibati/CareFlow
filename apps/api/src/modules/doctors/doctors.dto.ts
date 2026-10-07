@@ -1,6 +1,14 @@
 import { PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsEmail, IsHexColor, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { CatalogueQuery } from '../../common/dto/pagination.dto.js';
+import { NoNulChars } from '../search/search.validators.js';
+
+/** GET /doctors: NUL in the search text is a 400 instead of a database 500. */
+export class DoctorListQuery extends CatalogueQuery {
+  @IsOptional() @IsString() @MaxLength(200) @NoNulChars()
+  declare search?: string;
+}
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 

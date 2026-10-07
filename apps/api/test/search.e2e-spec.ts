@@ -227,6 +227,18 @@ describe('Search & ask-the-record (e2e)', () => {
 
   it('GET /search validates the query', async () => {
     await http.get('/api/v1/search').query({ q: 'x' }).set(auth(token)).expect(400);
+    // Whitespace-only queries would match everything; NUL cannot be bound into Postgres text (was a 500).
+    await http.get('/api/v1/search').query({ q: '   ' }).set(auth(token)).expect(400);
+    await http.get('/api/v1/search').query({ q: ' x ' }).set(auth(token)).expect(400);
+    await http.get('/api/v1/search?q=%00ab').set(auth(token)).expect(400);
+    await http.get('/api/v1/records/search').query({ q: '  ' }).set(auth(token)).expect(400);
+    await http.get('/api/v1/records/search?q=%00ab').set(auth(token)).expect(400);
+    await http.get('/api/v1/search/diagnoses').query({ q: ' ' }).set(auth(token)).expect(400);
+    await http.get('/api/v1/search/diagnoses?q=g%0043').set(auth(token)).expect(400);
+    await http.get('/api/v1/patients?search=%00ab').set(auth(token)).expect(400);
+    await http.get('/api/v1/billing/invoices?search=%00ab').set(auth(token)).expect(400);
+    await http.get('/api/v1/doctors?search=%00ab').set(auth(token)).expect(400);
+    await http.get('/api/v1/audit?search=%00ab').set(auth(token)).expect(400);
     await http.get('/api/v1/search').query({ q: 'haddad', limit: 99 }).set(auth(token)).expect(400);
     await http.get('/api/v1/search').query({ q: 'haddad' }).expect(401);
   });

@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, type Patient } from '@prisma/client';
+import { Prisma, type Patient, type Prescription } from '@prisma/client';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service.js';
 import { PaginationQuery, paginate, type Paginated } from '../../common/dto/pagination.dto.js';
 import { Permission } from '../../common/permissions/permissions.js';
@@ -28,8 +28,8 @@ export class PatientsService {
       this.prisma.db.patient.findMany({ where, skip: q.skip, take: q.pageSize, orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }] }),
       this.prisma.db.patient.count({ where }),
     ]);
-    // List views never expose the identifier, even masked.
-    return paginate(items.map((p) => this.toView(p, false)), total, q);
+    // List views never expose the identifier, even masked (and never decrypt it).
+    return paginate(items.map((p) => this.toListView(p)), total, q);
   }
 
   /**
@@ -62,23 +62,34 @@ export class PatientsService {
     const rows = await this.prisma.db.patient.findMany({ where: { id: { in: ids }, clinicId: user.clinicId } });
     const byId = new Map(rows.map((p) => [p.id, p]));
     const items = ids.map((id) => byId.get(id)).filter((p): p is Patient => !!p);
-    return paginate(items.map((p) => this.toView(p, false)), total, q);
+    return paginate(items.map((p) => this.toListView(p)), total, q);
   }
 
-  /** Full profile. Viewing it is recorded in the record access log. */
+  /**
+   * Full profile. Viewing it is recorded in the record access log. Allergies are
+   * always included (safety-relevant for every role that books or bills); active
+   * prescriptions are clinical record data and only returned with records:read.
+   */
   async get(user: AuthUser, id: string) {
+    const canReadRecords = user.permissions.has(Permission.RecordsRead);
     const patient = await this.prisma.db.patient.findFirst({
       where: { id, clinicId: user.clinicId },
       include: {
         allergies: { orderBy: { notedAt: 'desc' } },
         appointments: { orderBy: { startsAt: 'desc' }, take: 10, include: { doctor: { select: { id: true, firstName: true, lastName: true, title: true } } } },
-        prescriptions: { where: { status: 'ACTIVE' }, orderBy: { createdAt: 'desc' } },
+        ...(canReadRecords ? { prescriptions: { where: { status: 'ACTIVE' as const }, orderBy: { createdAt: 'desc' as const } } } : {}),
       },
     });
     if (!patient) throw new NotFoundException('Patient not found');
     await this.logAccess(user, id, 'VIEW_PROFILE');
-    const { allergies, appointments, prescriptions, ...base } = patient;
-    return { ...this.toView(base, user.permissions.has(Permission.PatientsSensitive)), allergies, appointments, prescriptions };
+    const { allergies, appointments, ...rest } = patient;
+    const { prescriptions, ...base } = rest as typeof rest & { prescriptions?: Prescription[] };
+    return {
+      ...this.toView(base, user.permissions.has(Permission.PatientsSensitive)),
+      allergies,
+      appointments,
+      ...(canReadRecords ? { prescriptions: prescriptions ?? [] } : {}),
+    };
   }
 
   async create(user: AuthUser, dto: CreatePatientDto) {
@@ -145,6 +156,12 @@ export class PatientsService {
     if (!exists) throw new NotFoundException('Patient not found');
   }
 
+  /** List / search rows: the national id is neither decrypted nor masked. */
+  toListView(p: Patient): PatientView {
+    const { nationalIdEnc: _omit, ...rest } = p;
+    return { ...rest, nationalId: null, nationalIdMasked: null };
+  }
+
   toView(p: Patient, revealSensitive: boolean): PatientView {
     const { nationalIdEnc, ...rest } = p;
     return {
@@ -154,14 +171,18 @@ export class PatientsService {
     };
   }
 
-  /** Sequential medical record number per clinic, e.g. MRN-000042. */
+  /**
+   * Sequential medical record number per clinic, e.g. MRN-000042. A
+   * transaction-scoped advisory lock per clinic serialises concurrent creates;
+   * the next number follows the highest `MRN-<digits>` in use (not the row count).
+   */
   private async nextMrn(tx: Prisma.TransactionClient, clinicId: string): Promise<string> {
-    const count = await tx.patient.count({ where: { clinicId } });
-    for (let n = count + 1; n < count + 1000; n++) {
-      const mrn = `MRN-${String(n).padStart(6, '0')}`;
-      const taken = await tx.patient.findUnique({ where: { clinicId_mrn: { clinicId, mrn } }, select: { id: true } });
-      if (!taken) return mrn;
-    }
-    throw new Error('Could not allocate MRN');
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`mrn:${clinicId}`}))`;
+    const rows = await tx.$queryRaw<{ seq: number | null }[]>`
+      SELECT max(substring(mrn FROM 5)::int)::int AS seq
+      FROM patients
+      WHERE clinic_id = ${clinicId}::uuid
+        AND mrn ~ '^MRN-[0-9]{1,9}$'`;
+    return `MRN-${String(Number(rows[0]?.seq ?? 0) + 1).padStart(6, '0')}`;
   }
 }

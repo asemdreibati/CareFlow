@@ -1,6 +1,14 @@
 import { PartialType } from '@nestjs/swagger';
 import { AllergySeverity, Gender } from '@prisma/client';
 import { IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
+import { CatalogueQuery } from '../../common/dto/pagination.dto.js';
+import { NoNulChars } from '../search/search.validators.js';
+
+/** GET /patients: the search text is bound into SQL, so NUL (unstorable in Postgres text) is a 400, not a 500. */
+export class PatientListQuery extends CatalogueQuery {
+  @IsOptional() @IsString() @MaxLength(200) @NoNulChars()
+  declare search?: string;
+}
 
 export class CreatePatientDto {
   @IsString() @IsNotEmpty() firstName: string;

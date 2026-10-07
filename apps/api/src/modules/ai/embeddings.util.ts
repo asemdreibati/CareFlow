@@ -4,6 +4,7 @@
  */
 import { createHash } from 'node:crypto';
 import { EMBEDDING_DIMENSIONS } from './embedding-provider.js';
+import { createRedactor, type PatientIdentifiers } from './redaction.js';
 
 // ────────────────────────────── pgvector literals ──────────────────────────────
 
@@ -66,9 +67,12 @@ const clean = (v: string | null | undefined): string | null => {
 
 /**
  * Builds the text that is sent to the embedding provider: visit date, chief
- * complaint, SOAP fields and diagnoses. Nothing else - the patient is never named.
+ * complaint, SOAP fields and diagnoses. Nothing else - the patient is never named:
+ * when `identifiers` are given, the patient's own name, phone, e-mail, MRN and
+ * national id typed into the free text are replaced by placeholders.
  */
-export function buildEncounterEmbeddingText(input: EncounterEmbeddingInput): string {
+export function buildEncounterEmbeddingText(input: EncounterEmbeddingInput, identifiers?: PatientIdentifiers | null): string {
+  const redact = createRedactor(identifiers);
   const lines: string[] = [`Visit date: ${isoDate(input.occurredAt)}`];
   const fields: [string, string | null | undefined][] = [
     ['Chief complaint', input.chiefComplaint],
@@ -78,10 +82,10 @@ export function buildEncounterEmbeddingText(input: EncounterEmbeddingInput): str
     ['Plan', input.plan],
   ];
   for (const [label, value] of fields) {
-    const v = clean(value);
+    const v = redact(clean(value));
     if (v) lines.push(`${label}: ${v}`);
   }
-  const dx = (input.diagnoses ?? []).map((d) => `${d.code} ${d.description}${d.isPrimary ? ' (primary)' : ''}`);
+  const dx = (input.diagnoses ?? []).map((d) => `${d.code} ${redact(d.description)}${d.isPrimary ? ' (primary)' : ''}`);
   if (dx.length > 0) lines.push(`Diagnoses: ${dx.join('; ')}`);
   return lines.join('\n');
 }

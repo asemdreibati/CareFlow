@@ -1,8 +1,9 @@
 import { Type } from 'class-transformer';
 import { IsDateString, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { MinTrimmedLength, NoNulChars } from './search.validators.js';
 
 export class GlobalSearchQuery {
-  @IsString() @MinLength(2) @MaxLength(200)
+  @IsString() @MinLength(2) @MinTrimmedLength(2) @MaxLength(200) @NoNulChars()
   q: string;
 
   /** Max hits per entity group (default 5, max 20). */
@@ -11,7 +12,7 @@ export class GlobalSearchQuery {
 }
 
 export class DiagnosisSearchQuery {
-  @IsString() @MinLength(1) @MaxLength(100)
+  @IsString() @MinLength(1) @MinTrimmedLength(1) @MaxLength(100) @NoNulChars()
   q: string;
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(50)
@@ -19,7 +20,7 @@ export class DiagnosisSearchQuery {
 }
 
 export class RecordsSearchQuery {
-  @IsString() @MinLength(2) @MaxLength(500)
+  @IsString() @MinLength(2) @MinTrimmedLength(2) @MaxLength(500) @NoNulChars()
   q: string;
 
   @IsOptional() @IsUUID() patientId?: string;

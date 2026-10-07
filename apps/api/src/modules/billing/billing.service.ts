@@ -6,12 +6,14 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import { paginate } from '../../common/dto/pagination.dto.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import type { CreateInvoiceDto, CreatePaymentDto, CreateServiceDto, InvoiceItemDto, InvoiceListQuery, SummaryQuery, UpdateInvoiceDto, UpdateServiceDto } from './billing.dto.js';
-import { applyPayment, computeTotals, InvoiceMathError, invoiceNumber, invoiceNumberPrefix, remainingBalance, toMoney, type InvoiceTotals, type LineInput } from './invoice-math.js';
+import { applyPayment, computeTotals, InvoiceMathError, invoiceNumber, invoiceNumberPrefix, remainingBalance, toMoney, yearInTimeZone, type InvoiceTotals, type LineInput } from './invoice-math.js';
 
 export const INVOICE_ISSUED = 'invoice.issued';
 export const PAYMENT_RECEIVED = 'payment.received';
 
 const DUE_IN_DAYS = 14;
+/** Statuses an invoice may be voided from (and only while nothing has been paid). */
+const VOIDABLE: InvoiceStatus[] = ['DRAFT', 'ISSUED'];
 
 const patientSummary = { select: { id: true, mrn: true, firstName: true, lastName: true, phone: true } } as const;
 // Items have no ordering column (ids are random UUIDs); they come back in insertion order.
@@ -135,12 +137,13 @@ export class BillingService {
       if (!enc) throw new NotFoundException('Encounter not found');
       if (enc.patientId !== dto.patientId) throw new BadRequestException('Encounter belongs to a different patient');
     }
-    const clinic = await this.prisma.db.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { currency: true } });
+    const clinic = await this.prisma.db.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { currency: true, timezone: true } });
     const totals = await this.resolveTotals(clinicId, dto.items, dto.discount, dto.tax);
 
     const create = () =>
       this.prisma.transaction(async (tx) => {
-        const number = await this.nextInvoiceNumber(tx, clinicId, new Date());
+        // Numbering year follows the clinic's calendar (an invoice at 01:00 on Jan 1st in Riyadh is next year's).
+        const number = await this.nextInvoiceNumber(tx, clinicId, yearInTimeZone(new Date(), clinic.timezone));
         return tx.invoice.create({
           data: {
             clinicId,
@@ -166,28 +169,33 @@ export class BillingService {
     try {
       row = await create();
     } catch (err) {
-      // Two invoices allocated the same number concurrently: the unique index caught it, allocate again.
+      // Numbers are allocated under an advisory lock, so this only fires if a number was inserted out of band.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') row = await create();
       else throw err;
     }
     return toInvoiceView(row);
   }
 
-  /** Drafts can be reshaped freely; once issued, an invoice is immutable (void it and create a new one). */
+  /**
+   * Drafts can be reshaped freely; once issued, an invoice is immutable (void it
+   * and create a new one). The invoice row is locked (`FOR UPDATE`) and its status
+   * re-checked inside the transaction, so an issue/void racing this edit either
+   * waits for it or makes it fail with 409; items are never replaced on an issued invoice.
+   */
   async updateInvoice(clinicId: string, id: string, dto: UpdateInvoiceDto): Promise<InvoiceView> {
-    const invoice = await this.findInvoice(clinicId, id, { items: true });
-    if (invoice.status !== 'DRAFT') throw new ConflictException('Only draft invoices can be edited');
-
-    const lines: InvoiceItemDto[] = dto.items ?? invoice.items.map((i) => ({ serviceId: i.serviceId ?? undefined, description: i.description, quantity: i.quantity, unitPrice: toMoney(i.unitPrice) }));
-    const totals = await this.resolveTotals(clinicId, lines, dto.discount ?? toMoney(invoice.discount), dto.tax ?? toMoney(invoice.tax));
-
     const row = await this.prisma.transaction(async (tx) => {
-      if (dto.items) {
-        await tx.invoiceItem.deleteMany({ where: { invoiceId: id, clinicId } });
-        await tx.invoiceItem.createMany({ data: totals.items.map((l, position) => ({ clinicId, invoiceId: id, serviceId: l.serviceId ?? undefined, description: l.description, quantity: l.quantity, unitPrice: l.unitPrice, total: l.total, position })) });
-      }
-      return tx.invoice.update({
-        where: { id },
+      const locked = await tx.$queryRaw<{ status: InvoiceStatus }[]>`
+        SELECT status FROM invoices WHERE id = ${id}::uuid AND clinic_id = ${clinicId}::uuid FOR UPDATE`;
+      if (locked.length === 0) throw new NotFoundException('Invoice not found');
+      if (locked[0].status !== 'DRAFT') throw new ConflictException('Only draft invoices can be edited');
+
+      const invoice = await tx.invoice.findUniqueOrThrow({ where: { id }, include: { items: { orderBy: { position: 'asc' } } } });
+      const lines: InvoiceItemDto[] =
+        dto.items ?? invoice.items.map((i) => ({ serviceId: i.serviceId ?? undefined, description: i.description, quantity: i.quantity, unitPrice: toMoney(i.unitPrice) }));
+      const totals = await this.resolveTotals(clinicId, lines, dto.discount ?? toMoney(invoice.discount), dto.tax ?? toMoney(invoice.tax), tx);
+
+      const touched = await tx.invoice.updateMany({
+        where: { id, clinicId, status: 'DRAFT' },
         data: {
           subtotal: totals.subtotal,
           discount: totals.discount,
@@ -196,32 +204,53 @@ export class BillingService {
           ...(dto.dueAt !== undefined ? { dueAt: new Date(dto.dueAt) } : {}),
           ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
         },
-        include: invoiceDetail,
       });
+      if (touched.count !== 1) throw new ConflictException('Only draft invoices can be edited');
+      if (dto.items) {
+        await tx.invoiceItem.deleteMany({ where: { invoiceId: id, clinicId } });
+        await tx.invoiceItem.createMany({ data: totals.items.map((l, position) => ({ clinicId, invoiceId: id, serviceId: l.serviceId ?? undefined, description: l.description, quantity: l.quantity, unitPrice: l.unitPrice, total: l.total, position })) });
+      }
+      return tx.invoice.findUniqueOrThrow({ where: { id }, include: invoiceDetail });
     });
     return toInvoiceView(row);
   }
 
+  /** DRAFT → ISSUED as a compare-and-set: a second issue (or an issue racing a void) gets 409. */
   async issueInvoice(user: AuthUser, id: string): Promise<InvoiceView> {
-    const invoice = await this.findInvoice(user.clinicId, id);
-    if (invoice.status !== 'DRAFT') throw new ConflictException(`Invoice is ${invoice.status}; only drafts can be issued`);
+    const clinicId = user.clinicId;
+    await this.findInvoice(clinicId, id);
     const issuedAt = new Date();
-    const row = await this.prisma.db.invoice.update({
-      where: { id },
-      data: { status: 'ISSUED', issuedAt, dueAt: invoice.dueAt ?? new Date(issuedAt.getTime() + DUE_IN_DAYS * 86_400_000) },
-      include: invoiceDetail,
+    const row = await this.prisma.transaction(async (tx) => {
+      const issued = await tx.invoice.updateMany({ where: { id, clinicId, status: 'DRAFT' }, data: { status: 'ISSUED', issuedAt } });
+      if (issued.count !== 1) {
+        const current = await tx.invoice.findFirst({ where: { id, clinicId }, select: { status: true } });
+        throw new ConflictException(`Invoice is ${current?.status ?? 'gone'}; only drafts can be issued`);
+      }
+      await tx.invoice.updateMany({ where: { id, clinicId, dueAt: null }, data: { dueAt: new Date(issuedAt.getTime() + DUE_IN_DAYS * 86_400_000) } });
+      return tx.invoice.findUniqueOrThrow({ where: { id }, include: invoiceDetail });
     });
     const view = toInvoiceView(row);
     this.events.emit(INVOICE_ISSUED, { invoice: view, actorUserId: user.id } satisfies BillingEvent);
     return view;
   }
 
+  /**
+   * Voids an unpaid DRAFT or ISSUED invoice. The status and `amountPaid = 0` are
+   * part of the write, so a payment that lands first makes the void a 409 (and a
+   * void that lands first makes the payment a 409).
+   */
   async voidInvoice(clinicId: string, id: string): Promise<InvoiceView> {
-    const invoice = await this.findInvoice(clinicId, id);
-    if (invoice.status === 'PAID') throw new ConflictException('A paid invoice cannot be voided');
-    if (invoice.status === 'VOID') throw new ConflictException('Invoice is already void');
-    const row = await this.prisma.db.invoice.update({ where: { id }, data: { status: 'VOID' }, include: invoiceDetail });
-    return toInvoiceView(row);
+    await this.findInvoice(clinicId, id);
+    const voided = await this.prisma.db.invoice.updateMany({
+      where: { id, clinicId, status: { in: VOIDABLE }, amountPaid: 0 },
+      data: { status: 'VOID' },
+    });
+    if (voided.count !== 1) {
+      const current = await this.findInvoice(clinicId, id);
+      if (current.status === 'VOID') throw new ConflictException('Invoice is already void');
+      throw new ConflictException(`Invoice is ${current.status}; only unpaid draft or issued invoices can be voided`);
+    }
+    return this.getInvoice(clinicId, id);
   }
 
   // ─────────────────────────────── payments ───────────────────────────────
@@ -296,11 +325,10 @@ export class BillingService {
   }
 
   /** Turns request lines into priced lines (service lookups) and computes the totals. */
-  private async resolveTotals(clinicId: string, items: InvoiceItemDto[], discount?: number, tax?: number): Promise<InvoiceTotals> {
+  private async resolveTotals(clinicId: string, items: InvoiceItemDto[], discount?: number, tax?: number, tx?: Prisma.TransactionClient): Promise<InvoiceTotals> {
     const serviceIds = [...new Set(items.map((i) => i.serviceId).filter((id): id is string => !!id))];
-    const services = serviceIds.length
-      ? await this.prisma.db.service.findMany({ where: { id: { in: serviceIds }, clinicId, isActive: true } })
-      : [];
+    const args = { where: { id: { in: serviceIds }, clinicId, isActive: true } } satisfies Prisma.ServiceFindManyArgs;
+    const services: Service[] = serviceIds.length ? await (tx ? tx.service.findMany(args) : this.prisma.db.service.findMany(args)) : [];
     const byId = new Map(services.map((s) => [s.id, s]));
 
     const lines: LineInput[] = items.map((item, idx) => {
@@ -320,16 +348,21 @@ export class BillingService {
     }
   }
 
-  /** Sequential `INV-YYYY-000001` per clinic and year, allocated inside the caller's transaction. */
-  private async nextInvoiceNumber(tx: Prisma.TransactionClient, clinicId: string, at: Date): Promise<string> {
-    const year = at.getUTCFullYear();
+  /**
+   * Sequential `INV-YYYY-000001` per clinic and (clinic-local) year, allocated
+   * inside the caller's transaction. A transaction-scoped advisory lock per
+   * clinic+year serialises concurrent creates, and the next number follows the
+   * highest one in use (not the row count, which drifts if rows are removed or
+   * numbered out of band).
+   */
+  private async nextInvoiceNumber(tx: Prisma.TransactionClient, clinicId: string, year: number): Promise<string> {
     const prefix = invoiceNumberPrefix(year);
-    const count = await tx.invoice.count({ where: { clinicId, number: { startsWith: prefix } } });
-    for (let seq = count + 1; seq < count + 1000; seq++) {
-      const number = invoiceNumber(year, seq);
-      const taken = await tx.invoice.findUnique({ where: { clinicId_number: { clinicId, number } }, select: { id: true } });
-      if (!taken) return number;
-    }
-    throw new Error('Could not allocate an invoice number');
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`invoice:${clinicId}:${year}`}))`;
+    const rows = await tx.$queryRaw<{ seq: number | null }[]>`
+      SELECT max(substring(number FROM ${prefix.length + 1}::int)::int)::int AS seq
+      FROM invoices
+      WHERE clinic_id = ${clinicId}::uuid
+        AND number ~ ${`^${prefix}[0-9]{1,9}$`}`;
+    return invoiceNumber(year, Number(rows[0]?.seq ?? 0) + 1);
   }
 }

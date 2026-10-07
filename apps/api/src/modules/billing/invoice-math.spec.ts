@@ -1,4 +1,4 @@
-import { applyPayment, computeTotals, InvoiceMathError, invoiceNumber, lineTotal, remainingBalance, toMoney } from './invoice-math.js';
+import { applyPayment, computeTotals, InvoiceMathError, invoiceNumber, lineTotal, MAX_MONEY, remainingBalance, toMoney, yearInTimeZone } from './invoice-math.js';
 
 describe('invoice math', () => {
   describe('lineTotal', () => {
@@ -85,6 +85,30 @@ describe('invoice math', () => {
       expect(toMoney({ toNumber: () => 7.25 })).toBe(7.25);
       expect(toMoney(null)).toBe(0);
       expect(() => toMoney('abc')).toThrow(InvoiceMathError);
+    });
+  });
+
+  describe('bounds', () => {
+    it('caps line totals, subtotal and total at MAX_MONEY', () => {
+      expect(lineTotal(1, MAX_MONEY)).toBe(MAX_MONEY);
+      expect(() => lineTotal(2, MAX_MONEY)).toThrow(/line total cannot exceed/);
+      expect(() => computeTotals([{ description: 'a', quantity: 1, unitPrice: MAX_MONEY }, { description: 'b', quantity: 1, unitPrice: 1 }])).toThrow(/subtotal cannot exceed/);
+      expect(() => computeTotals([{ description: 'a', quantity: 1, unitPrice: MAX_MONEY }], 0, 0.01)).toThrow(/total cannot exceed/);
+      expect(computeTotals([{ description: 'a', quantity: 1, unitPrice: MAX_MONEY }], 0.01, 0.01).total).toBe(MAX_MONEY);
+    });
+  });
+
+  describe('yearInTimeZone', () => {
+    it('uses the clinic calendar around new year', () => {
+      const at = new Date('2026-12-31T22:30:00Z');
+      expect(yearInTimeZone(at, 'UTC')).toBe(2026);
+      expect(yearInTimeZone(at, 'Asia/Riyadh')).toBe(2027); // 01:30 on Jan 1st locally
+      expect(yearInTimeZone(new Date('2027-01-01T03:00:00Z'), 'America/New_York')).toBe(2026);
+    });
+    it('falls back to UTC for a missing or unknown zone', () => {
+      const at = new Date('2026-12-31T22:30:00Z');
+      expect(yearInTimeZone(at, null)).toBe(2026);
+      expect(yearInTimeZone(at, 'Not/AZone')).toBe(2026);
     });
   });
 });

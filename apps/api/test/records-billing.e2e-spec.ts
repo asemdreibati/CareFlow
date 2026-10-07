@@ -206,6 +206,25 @@ describe('Records, billing and audit (e2e)', () => {
     await api().patch(`/api/v1/billing/invoices/${invoiceId}`).set(auth()).send({ discount: 1000 }).expect(400);
   });
 
+  it('rejects out-of-range money instead of overflowing the DECIMAL(12,2) columns', async () => {
+    const big = await api()
+      .post('/api/v1/billing/invoices')
+      .set(auth())
+      .send({ patientId, items: [{ description: 'x', quantity: 1, unitPrice: 99999999999 }] })
+      .expect(400);
+    expect(JSON.stringify(big.body.message)).toMatch(/unitPrice/);
+    // Each field is within range but the computed line total is not.
+    const line = await api()
+      .post('/api/v1/billing/invoices')
+      .set(auth())
+      .send({ patientId, items: [{ description: 'x', quantity: 10_000, unitPrice: 99_999_999.99 }] })
+      .expect(400);
+    expect(line.body.message).toMatch(/cannot exceed/);
+    await api().post('/api/v1/billing/invoices').set(auth()).send({ patientId, items: [{ description: 'x', quantity: 1, unitPrice: 1 }], tax: 1e9 }).expect(400);
+    await api().post('/api/v1/billing/services').set(auth()).send({ code: 'BIG', name: 'Big', price: 1e9 }).expect(400);
+    await api().post(`/api/v1/billing/invoices/${invoiceId}/payments`).set(auth()).send({ amount: 1e12, method: 'CASH' }).expect(400);
+  });
+
   it('allocates the next number for a second invoice', async () => {
     const res = await api()
       .post('/api/v1/billing/invoices')

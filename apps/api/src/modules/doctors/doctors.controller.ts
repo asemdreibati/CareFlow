@@ -2,9 +2,8 @@ import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, P
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser, RequirePermissions } from '../../common/auth/decorators.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
-import { CatalogueQuery } from '../../common/dto/pagination.dto.js';
 import { Permission } from '../../common/permissions/permissions.js';
-import { CreateDoctorDto, CreateTimeOffDto, SetAvailabilityDto, UpdateDoctorDto } from './doctors.dto.js';
+import { CreateDoctorDto, CreateTimeOffDto, DoctorListQuery, SetAvailabilityDto, UpdateDoctorDto } from './doctors.dto.js';
 import { DoctorsService } from './doctors.service.js';
 
 @ApiTags('doctors')
@@ -15,7 +14,7 @@ export class DoctorsController {
 
   @Get()
   @RequirePermissions(Permission.DoctorsRead)
-  list(@CurrentUser() user: AuthUser, @Query() q: CatalogueQuery) {
+  list(@CurrentUser() user: AuthUser, @Query() q: DoctorListQuery) {
     return this.doctors.list(user.clinicId, q, q.includeInactive);
   }
 

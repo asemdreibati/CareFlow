@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import type { NotificationType, Role } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { tenantContext } from '../../common/tenancy/tenant-context.js';
+import { activeMembershipWhere } from './notifications.gateway.js';
 import { NotificationsService } from './notifications.service.js';
 
 /** Shape of `appointment.*` events (see AppointmentsService). */
@@ -92,6 +93,7 @@ export class NotificationsListeners {
 
   // ─────────────────────────────── internals ───────────────────────────────
 
+  /** Recipients are filtered to active members of `e.clinicId` by NotificationsService.notify(). */
   private appointment(e: AppointmentEventPayload, type: NotificationType, title: string, verb: string) {
     return this.guard(type, async () => {
       const recipients = [e.doctor.userId, e.createdById].filter((id): id is string => !!id && id !== e.actorUserId);
@@ -112,7 +114,7 @@ export class NotificationsListeners {
     const cid = clinicId ?? tenantContext.get()?.clinicId;
     if (!cid) return [];
     const members = await this.prisma.db.clinicMembership.findMany({
-      where: { clinicId: cid, isActive: true, role: { in: BILLING_ROLES }, user: { isActive: true } },
+      where: { ...activeMembershipWhere(cid), role: { in: BILLING_ROLES } },
       select: { userId: true },
     });
     return members.map((m) => m.userId).filter((id) => id !== actorUserId);

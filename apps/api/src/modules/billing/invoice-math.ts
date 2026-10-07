@@ -26,6 +26,13 @@ export interface InvoiceTotals {
   total: number;
 }
 
+/**
+ * Largest amount accepted anywhere on an invoice (unit price, line, discount,
+ * tax, subtotal, total, payment). Well inside the DECIMAL(12,2) columns, so an
+ * oversized request is a 400 instead of a numeric-overflow 500.
+ */
+export const MAX_MONEY = 99_999_999.99;
+
 /** Raised for inputs that do not make an invoice (negative amounts, discount above subtotal, ...). */
 export class InvoiceMathError extends Error {
   constructor(message: string) {
@@ -57,7 +64,9 @@ export function toMoney(value: unknown): number {
 export function lineTotal(quantity: number, unitPrice: number): number {
   if (!Number.isInteger(quantity) || quantity < 1) throw new InvoiceMathError('quantity must be a positive integer');
   if (unitPrice < 0) throw new InvoiceMathError('unitPrice cannot be negative');
-  return fromCents(quantity * toCents(unitPrice));
+  const cents = quantity * toCents(unitPrice);
+  if (cents > toCents(MAX_MONEY)) throw new InvoiceMathError(`line total cannot exceed ${MAX_MONEY.toFixed(2)}`);
+  return fromCents(cents);
 }
 
 /**
@@ -74,6 +83,9 @@ export function computeTotals(items: LineInput[], discount = 0, tax = 0): Invoic
   const discountCents = toCents(discount);
   const taxCents = toCents(tax);
   if (discountCents > subtotalCents) throw new InvoiceMathError('discount cannot exceed the subtotal');
+  const maxCents = toCents(MAX_MONEY);
+  if (subtotalCents > maxCents) throw new InvoiceMathError(`subtotal cannot exceed ${MAX_MONEY.toFixed(2)}`);
+  if (taxCents > maxCents || subtotalCents - discountCents + taxCents > maxCents) throw new InvoiceMathError(`total cannot exceed ${MAX_MONEY.toFixed(2)}`);
 
   return {
     items: lines,
@@ -111,4 +123,16 @@ export function invoiceNumber(year: number, sequence: number): string {
 
 export function invoiceNumberPrefix(year: number): string {
   return `INV-${year}-`;
+}
+
+/** Calendar year of `at` in `timeZone` (IANA). Falls back to UTC for an unknown zone. */
+export function yearInTimeZone(at: Date, timeZone: string | null | undefined): number {
+  try {
+    const year = new Intl.DateTimeFormat('en-US', { timeZone: timeZone || 'UTC', year: 'numeric' }).formatToParts(at).find((p) => p.type === 'year')?.value;
+    const n = Number(year);
+    if (Number.isInteger(n)) return n;
+  } catch {
+    // RangeError: invalid time zone
+  }
+  return at.getUTCFullYear();
 }
