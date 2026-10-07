@@ -17,13 +17,18 @@ Errors: `{ statusCode, message, error }`. Validation errors return 400 with `mes
 | GET | /auth/me | → `session` |
 | POST | /auth/change-password | `{currentPassword,newPassword}` → 204 |
 
-`session = { user:{id,email,firstName,lastName}, clinic:{id,name,slug,timezone,currency}, role, doctorId?, permissions:string[], clinics:[{id,name,slug,role}] }`
+`session = { user:{id,email,firstName,lastName,locale}, clinic:{id,name,slug,timezone,currency}, role, doctorId?, permissions:string[], clinics:[{id,name,slug,role}], invitations:[{id,clinic:{id,name},role,invitedAt}] }`
+
+Access tokens are accepted only in the `Authorization: Bearer` header. Refresh tokens rotate atomically (one use).
+Invitations: POST `/auth/invitations/:id/accept` and `/auth/invitations/:id/decline` (the invited user only).
 
 ## Clinic (`/clinic`) — implemented
 GET `/clinic`, PATCH `/clinic`, GET `/clinic/stats` → `{patients, doctors, todayAppointments, upcoming, unpaidInvoices, outstanding}`
 
 ## Members (`/members`) — implemented
-GET `/members`, GET `/members/permissions` → `{all, byRole}`, POST `/members` (invite), PATCH `/members/:id`
+GET `/members` (each row has `status: ACTIVE|INACTIVE|INVITED`), GET `/members/permissions` → `{all, byRole}`, POST `/members` (invite), PATCH `/members/:id`, DELETE `/members/:id/invitation` (withdraw a pending invitation).
+Inviting an email that already has an account creates a pending invitation the user must accept; nothing about the account is returned.
+Members cannot change their own permissions; only owners may grant permissions outside their own role.
 
 ## Doctors (`/doctors`) — implemented
 GET `/doctors?includeInactive`, GET `/doctors/:id` (includes `availability[]`, `timeOff[]`), POST, PATCH `/:id`, DELETE `/:id` (deactivate),
@@ -109,10 +114,17 @@ GET `/portal/appointments/:id`, GET `/portal/slots?doctorId|specialty&durationMi
 (idempotent via `Idempotency-Key`), POST `/portal/appointments/:id/confirm|cancel` (cancel < 2h before start → 409),
 GET `/portal/invoices[/:id]`, GET/POST `/portal/waitlist`, POST `/portal/waitlist/:id/accept|decline`, GET/POST `/portal/consents {type, version}`.
 Staff enable access per patient with `PATCH /patients/:id {portalEnabled: true, locale}`.
+When several patients share the phone, verify returns `{requiresPatientSelection: true, candidates, selectionToken}` and
+POST `/portal/auth/select {selectionToken, patientId}` completes the login. Limits: OTP requests 60 s apart and 3 per 15 min
+per phone, a per-phone failure budget, at most 3 upcoming portal bookings within a 90-day horizon on the doctor's slot grid
+(`clinic.settings.portalMaxActiveBookings`, `portalBookingHorizonDays`), patient cancellation ≥ 2 h before start (portal and SMS).
 
 ## Messaging (`/messages`, `/webhooks/twilio/*`) — implemented (phase 3)
 GET `/messages?patientId&appointmentId&channel&direction&page` (patients:read), POST `/messages {patientId, channel, body, subject?, appointmentId?}` (patients:write).
 Providers from env: SMS/WhatsApp via Twilio REST, email via SMTP, or `log` for development. Reminder channels per clinic
 (`clinic.settings.reminderChannels`, default IN_APP + SMS when a phone exists). Inbound replies: POST `/webhooks/twilio/inbound`
 (signature-validated) parses `1/نعم/yes` → CONFIRMED and `2/لا/no` → CANCELLED on the patient's next appointment and answers with TwiML;
-POST `/webhooks/twilio/status` records delivery status.
+POST `/webhooks/twilio/status` records delivery status. Replies act only on the appointment named by the latest
+reminder/confirmation sent to that phone within 7 days; duplicate deliveries (same MessageSid) are ignored. Without
+`TWILIO_AUTH_TOKEN`, webhooks are refused unless `TWILIO_WEBHOOK_INSECURE=1` (never in production). OTP bodies are masked in
+`messages` and logs.

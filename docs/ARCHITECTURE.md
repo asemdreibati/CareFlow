@@ -111,12 +111,28 @@ preference is stored in `users.locale`, patient preference in `patients.locale`,
 clinic default in `clinic.settings.defaultLocale`; server-side messages resolve the
 locale in that order.
 
+## Database roles
+
+The API must connect as a role that is neither a superuser nor `BYPASSRLS`: superusers ignore
+Row-Level Security even when it is forced. `infra/db/init.sql` creates that role (and installs the
+`vector` extension, which needs a superuser once); docker-compose and CI use it, and an e2e test
+asserts the connection is subject to RLS.
+
+## Concurrency rules
+
+State transitions are compare-and-set writes (`updateMany ... where status = <expected>`) or run
+under a row lock, never read-then-write: encounter edits and signing, AI draft application,
+invoice update/issue/void, waitlist claims and holds, reminder claims (lease), OTP attempts,
+refresh-token rotation and owner demotion. Sequential numbers (MRN, invoice) and idempotency keys
+use per-clinic `pg_advisory_xact_lock`.
+
 ## Sensitive data
 
 * Passwords: bcrypt (12 rounds). Refresh tokens: random, stored hashed, rotated on use.
 * `patients.national_id_enc`: AES-256-GCM via `FieldEncryptionService` (key from `FIELD_ENCRYPTION_KEY`).
 * `record_access_logs`: who opened which patient record (append-only, DB trigger blocks UPDATE/DELETE).
-* `audit_logs`: request-level trail with redacted bodies (append-only).
+* `audit_logs`: request-level trail with redacted bodies (append-only), including requests denied by
+  authentication, authorisation or throttling, and the acting patient for portal actions.
 * Helmet, CORS allow-list, request throttling, validation whitelist (unknown fields rejected).
 
 ## Notifications
