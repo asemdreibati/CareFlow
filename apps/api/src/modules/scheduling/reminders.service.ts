@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import type { Reminder, ReminderChannel, ReminderStatus } from '@prisma/client';
+import { Prisma, type Reminder, type ReminderChannel, type ReminderStatus } from '@prisma/client';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { tenantContext } from '../../common/tenancy/tenant-context.js';
@@ -14,6 +14,12 @@ import { errorMessage, inClinic, MOVABLE_STATUSES } from './scheduling.common.js
 const HOUR = 3_600_000;
 export const REMINDER_MAX_ATTEMPTS = 3;
 export const REMINDER_BATCH = 100;
+/** A claimed row is invisible to other passes for this long (lease); an interrupted pass is retried after it. */
+export const REMINDER_LEASE_MS = 5 * 60_000;
+/** Delay before retry n (1-based) of a failed delivery. */
+export function reminderBackoffMs(attempt: number): number {
+  return Math.min(60, 2 ** Math.max(0, attempt - 1)) * 60_000;
+}
 const LIST_LIMIT = 200;
 
 /** A delivery problem that will not go away by retrying (no address, appointment gone). */
@@ -118,10 +124,14 @@ export class RemindersService {
   }
 
   /**
-   * One worker pass: for every clinic with due PENDING rows, claim up to 100
-   * (compare-and-set on status + attempts), deliver, then mark SENT, or PENDING
-   * again with `lastError` (retry on the next pass) until the third attempt
-   * fails → FAILED. Exposed so tests can drive it without the cron.
+   * One worker pass: for every clinic with due PENDING rows, claim up to 100 and
+   * deliver, then mark SENT, or PENDING again with `lastError` and a backoff
+   * (`scheduledFor` moved forward) until the third attempt fails → FAILED.
+   * Claiming is a lease without extra columns: a compare-and-set on
+   * (status, due, attempts) that bumps `attempts` and pushes `scheduledFor`
+   * 5 minutes ahead, so an overlapping pass (another instance, a slow tick) no
+   * longer sees the row as due and only the winner sends. Exposed so tests can
+   * drive it without the cron.
    */
   async runOnce(now = new Date()): Promise<ReminderPassResult> {
     const total: ReminderPassResult = { claimed: 0, sent: 0, failed: 0, retried: 0, cancelled: 0 };
@@ -154,25 +164,47 @@ export class RemindersService {
       orderBy: { scheduledFor: 'asc' },
       take: REMINDER_BATCH,
     });
-    for (const row of due) {
-      // In-flight marker: only one worker wins the compare-and-set.
-      const claim = await this.prisma.db.reminder.updateMany({ where: { id: row.id, status: 'PENDING', attempts: row.attempts }, data: { attempts: { increment: 1 } } });
-      if (claim.count === 0) continue;
+    for (const [index, row] of due.entries()) {
+      // Lease: only one pass wins the compare-and-set; the row is then not due for anyone else.
+      // `scheduledFor` is part of a unique key (appointment, channel, time): the batch index keeps
+      // the lease / backoff instants of sibling rows (24h and 2h IN_APP reminders) distinct.
+      const leaseUntil = new Date(now.getTime() + REMINDER_LEASE_MS + index);
+      let claimed: number;
+      try {
+        claimed = (
+          await this.prisma.db.reminder.updateMany({
+            where: { id: row.id, status: 'PENDING', scheduledFor: { lte: now }, attempts: row.attempts },
+            data: { attempts: { increment: 1 }, scheduledFor: leaseUntil },
+          })
+        ).count;
+      } catch (err) {
+        // A sibling row leased by an overlapping pass at the very same instant: leave it for the next pass.
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') continue;
+        throw err;
+      }
+      if (claimed === 0) continue;
       result.claimed++;
       const attempt = row.attempts + 1;
+      // Settled rows get their planned time back (the lease was only a marker); finishing updates are guarded by the lease.
+      const mine = { id: row.id, status: 'PENDING' as const, attempts: attempt, scheduledFor: leaseUntil };
       try {
         const outcome = await this.deliver(row, clinicId, now);
         if (outcome === 'obsolete') {
-          await this.prisma.db.reminder.update({ where: { id: row.id }, data: { status: 'CANCELLED', lastError: 'Appointment is no longer upcoming' } });
+          await this.prisma.db.reminder.updateMany({ where: mine, data: { status: 'CANCELLED', scheduledFor: row.scheduledFor, lastError: 'Appointment is no longer upcoming' } });
           result.cancelled++;
         } else {
-          await this.prisma.db.reminder.update({ where: { id: row.id }, data: { status: 'SENT', sentAt: new Date(), lastError: null } });
+          await this.prisma.db.reminder.updateMany({ where: mine, data: { status: 'SENT', scheduledFor: row.scheduledFor, sentAt: new Date(), lastError: null } });
           result.sent++;
         }
       } catch (err) {
         const message = errorMessage(err).slice(0, 1000);
         const final = err instanceof PermanentReminderError || attempt >= REMINDER_MAX_ATTEMPTS;
-        await this.prisma.db.reminder.update({ where: { id: row.id }, data: { status: final ? 'FAILED' : 'PENDING', lastError: message } });
+        await this.prisma.db.reminder.updateMany({
+          where: mine,
+          data: final
+            ? { status: 'FAILED', scheduledFor: row.scheduledFor, lastError: message }
+            : { status: 'PENDING', scheduledFor: new Date(now.getTime() + reminderBackoffMs(attempt) + index), lastError: message },
+        });
         if (final) result.failed++;
         else result.retried++;
       }

@@ -83,6 +83,8 @@ describe('Slot search + resources + booking robustness (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Let asynchronous event listeners (reminder sync, scoring) finish before the DB disconnects.
+    await new Promise((r) => setTimeout(r, 800));
     await app.close();
   });
 
@@ -377,5 +379,51 @@ describe('Slot search + resources + booking robustness (e2e)', () => {
     // Without a version the update still succeeds and bumps the version
     const v5 = await request(http).patch(`/api/v1/appointments/${id}`).set(auth(ownerToken)).send({ reason: 'no lock' }).expect(200);
     expect(v5.body.version).toBe(5);
+  });
+
+  // ─────────────────────────────── review regressions ───────────────────────────────
+
+  it('concurrent bookings with the same Idempotency-Key: one creates, the other replays (never 409)', async () => {
+    const later = new Date(Date.now() + 40 * 86_400_000).toISOString().slice(0, 10);
+    for (let i = 0; i < 6; i++) {
+      const key = `concurrent-${ts}-${i}`;
+      const payload = { doctorId: doctorB, patientId, startsAt: `${later}T${String(6 + i).padStart(2, '0')}:00:00.000Z`, durationMinutes: 30 };
+      const [r1, r2] = await Promise.all([1, 2].map(() => request(http).post('/api/v1/appointments').set(auth(ownerToken)).set('Idempotency-Key', key).send(payload)));
+      expect([r1.status, r2.status].sort()).toEqual([200, 201]);
+      expect(r1.body.id).toBe(r2.body.id);
+      const replayed = r1.status === 200 ? r1 : r2;
+      expect(replayed.headers['idempotent-replay']).toBe('true');
+    }
+    const list = await request(http).get('/api/v1/appointments').set(auth(ownerToken)).query({ doctorId: doctorB, from: `${later}T00:00:00.000Z`, to: `${later}T23:59:00.000Z` }).expect(200);
+    expect(list.body.total).toBe(6);
+  });
+
+  it('refuses to edit a NO_SHOW appointment, so its released resources are never re-activated', async () => {
+    const later = new Date(Date.now() + 41 * 86_400_000).toISOString().slice(0, 10);
+    const next = new Date(Date.now() + 42 * 86_400_000).toISOString().slice(0, 10);
+    const created = await request(http)
+      .post('/api/v1/appointments')
+      .set(auth(ownerToken))
+      .send({ doctorId: doctorA, patientId, startsAt: `${later}T07:00:00.000Z`, durationMinutes: 30, resourceIds: [roomId] })
+      .expect(201);
+    await request(http).post(`/api/v1/appointments/${created.body.id}/status`).set(auth(ownerToken)).send({ status: 'NO_SHOW' }).expect(200);
+    const patch = await request(http)
+      .patch(`/api/v1/appointments/${created.body.id}`)
+      .set(auth(ownerToken))
+      .send({ resourceIds: [roomId], startsAt: `${next}T08:00:00.000Z` })
+      .expect(409);
+    expect(patch.body.message).toMatch(/no show/i);
+    await request(http).patch(`/api/v1/appointments/${created.body.id}`).set(auth(ownerToken)).send({ notes: 'x' }).expect(409);
+    // The room is free at both times for someone else
+    for (const startsAt of [`${later}T07:00:00.000Z`, `${next}T08:00:00.000Z`]) {
+      await request(http).post('/api/v1/appointments').set(auth(ownerToken)).send({ doctorId: doctorB, patientId, startsAt, durationMinutes: 30, resourceIds: [roomId] }).expect(201);
+    }
+    const bookings = await request(http)
+      .get(`/api/v1/resources/${roomId}/bookings`)
+      .set(auth(ownerToken))
+      .query({ from: `${later}T00:00:00.000Z`, to: `${next}T23:59:00.000Z` })
+      .expect(200);
+    const mine = bookings.body.bookings.filter((b: { appointment: { id: string } }) => b.appointment.id === created.body.id);
+    expect(mine.every((b: { active: boolean }) => !b.active)).toBe(true);
   });
 });

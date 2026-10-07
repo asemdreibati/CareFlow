@@ -1,4 +1,5 @@
 import { AppointmentType, RecurrenceFrequency, SeriesStatus } from '@prisma/client';
+import { MAX_RECURRENCE_INTERVAL } from '../../scheduling-engine/recurrence.js';
 import { ArrayMaxSize, IsArray, IsEnum, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
 
 const YYYY_MM_DD = /^\d{4}-\d{2}-\d{2}$/;
@@ -11,7 +12,8 @@ export class CreateSeriesDto {
   @IsUUID() doctorId: string;
   @IsUUID() patientId: string;
   @IsEnum(RecurrenceFrequency) frequency: RecurrenceFrequency;
-  @IsOptional() @IsInt() @Min(1) @Max(365) interval?: number;
+  /** Every N days / weeks / months; 1..52 (mirrors the `appointment_series` CHECK constraint). */
+  @IsOptional() @IsInt() @Min(1) @Max(MAX_RECURRENCE_INTERVAL) interval?: number;
   /** WEEKLY: 0 = Sunday … 6 = Saturday. */
   @IsOptional() @IsArray() @ArrayMaxSize(7) @IsInt({ each: true }) @Min(0, { each: true }) @Max(6, { each: true }) byWeekday?: number[];
   /** MONTHLY: 1..31 (months without that day are skipped). */

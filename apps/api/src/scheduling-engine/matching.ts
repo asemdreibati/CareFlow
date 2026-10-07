@@ -121,3 +121,125 @@ export function assignmentObjective(costMatrix: readonly (readonly number[])[], 
   }
   return total;
 }
+
+/** A column of `disjointAssignment`: a start instant on one resource (e.g. a doctor). */
+export interface IntervalColumn {
+  /** Columns of the same group must not receive overlapping intervals. */
+  group: string;
+  start: number;
+}
+
+export interface DisjointAssignmentResult extends AssignmentResult {
+  /** Number of solver runs (1 when the first matching was already disjoint). */
+  rounds: number;
+}
+
+/**
+ * Min-cost assignment where row `i` placed on column `j` occupies
+ * [columns[j].start, columns[j].start + durations[i]) and the occupied intervals
+ * of one group must be pairwise disjoint (a slot grid guarantees distinct starts,
+ * not disjoint ranges: a 60-minute appointment on a 30-minute grid collides with
+ * its neighbour).
+ *
+ * Repair loop: solve; for every overlapping pair in a group keep one placement
+ * (the winner: already pinned, else the one ending first, else the cheaper one),
+ * pin it to its column and forbid, for every OTHER row,
+ * every column of that group whose interval would overlap the winner's
+ * [start, end); re-solve until no conflict is left. Each round forbids at least the loser's current edge, so the
+ * loop converges; it is bounded by the number of columns, and any conflict that
+ * survives the bound is resolved by leaving the costlier row unmatched. The input
+ * matrix is not modified.
+ */
+export function disjointAssignment(
+  costMatrix: readonly (readonly number[])[],
+  durations: readonly number[],
+  columns: readonly IntervalColumn[],
+  maxRounds = Math.max(1, columns.length),
+): DisjointAssignmentResult {
+  const matrix = costMatrix.map((row) => [...row]);
+  const n = matrix.length;
+  let assignment: number[] = Array.from({ length: n }, (): number => -1);
+  let rounds = 0;
+
+  type Placed = { row: number; col: number; start: number; end: number; cost: number };
+  const placedByGroup = (a: readonly number[]) => {
+    const byGroup = new Map<string, Placed[]>();
+    a.forEach((col, row) => {
+      if (col < 0) return;
+      const c = columns[col];
+      const p: Placed = { row, col, start: c.start, end: c.start + durations[row], cost: costMatrix[row][col] };
+      const list = byGroup.get(c.group);
+      if (list) list.push(p);
+      else byGroup.set(c.group, [p]);
+    });
+    for (const list of byGroup.values()) list.sort((x, y) => x.start - y.start || x.cost - y.cost || x.row - y.row);
+    return byGroup;
+  };
+  // The winner keeps its column (pinned) and its interval becomes exclusive to it,
+  // so the reserved time is never left empty by a later re-solve.
+  const pinned = new Set<number>();
+  const reserve = (winner: Placed, group: string) => {
+    if (pinned.has(winner.row)) return;
+    pinned.add(winner.row);
+    for (let col = 0; col < columns.length; col++) {
+      if (col !== winner.col) matrix[winner.row][col] = Infinity;
+      const c = columns[col];
+      if (c.group !== group || c.start >= winner.end) continue;
+      for (let row = 0; row < n; row++) {
+        if (pinned.has(row)) continue;
+        if (c.start + durations[row] > winner.start) matrix[row][col] = Infinity;
+      }
+    }
+  };
+  // A pinned placement always wins; otherwise the one ending first (the
+  // earliest-end rule of interval scheduling packs the most placements into the
+  // group), then the cheaper one.
+  const winnerOf = (a: Placed, b: Placed): Placed => {
+    if (pinned.has(a.row) !== pinned.has(b.row)) return pinned.has(a.row) ? a : b;
+    if (a.end !== b.end) return a.end < b.end ? a : b;
+    return a.cost <= b.cost ? a : b;
+  };
+
+  while (rounds < maxRounds) {
+    rounds++;
+    assignment = minCostAssignment(matrix).assignment;
+    let conflict = false;
+    for (const [group, list] of placedByGroup(assignment)) {
+      let kept: Placed | null = null;
+      for (const cur of list) {
+        if (kept && kept.end > cur.start) {
+          conflict = true;
+          const winner = winnerOf(kept, cur);
+          reserve(winner, group);
+          kept = winner;
+        } else {
+          kept = cur;
+        }
+      }
+    }
+    if (!conflict) break;
+  }
+
+  // Safety net (only reached when the bound was hit): drop the costlier row of any remaining overlap.
+  for (const list of placedByGroup(assignment).values()) {
+    let kept: Placed | null = null;
+    for (const cur of list) {
+      if (kept && kept.end > cur.start) {
+        const loser = winnerOf(kept, cur) === kept ? cur : kept;
+        assignment[loser.row] = -1;
+        if (loser === kept) kept = cur;
+      } else {
+        kept = cur;
+      }
+    }
+  }
+
+  let totalCost = 0;
+  let matched = 0;
+  assignment.forEach((col, row) => {
+    if (col < 0) return;
+    totalCost += costMatrix[row][col];
+    matched++;
+  });
+  return { assignment, totalCost, matched, rounds };
+}

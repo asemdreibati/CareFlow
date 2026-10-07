@@ -192,6 +192,32 @@ describe('availability', () => {
     expect(isWithinAvailability(r('2026-10-12T06:00:00Z', '2026-10-12T06:00:00Z'), blocks, RIYADH)).toBe(false);
   });
 
+  it('isWithinAvailability compares the wall-clock end on DST days (America/New_York)', () => {
+    const night = [{ weekday: 0, startTime: '00:00', endTime: '03:00', slotMinutes: 30 }];
+    // Spring forward (Sun 2027-03-14): 01:30 EST + 60 min ends at 03:30 EDT on the wall → outside 00:00–03:00.
+    expect(isWithinAvailability(r('2027-03-14T06:30:00Z', '2027-03-14T07:30:00Z'), night, NY)).toBe(false);
+    // …while 01:00 EST + 60 min ends at 03:00 EDT → exactly at the block end.
+    expect(isWithinAvailability(r('2027-03-14T06:00:00Z', '2027-03-14T07:00:00Z'), night, NY)).toBe(true);
+    // Fall back (Sun 2026-11-01): 00:00 EDT + 210 min ends at 02:30 EST on the wall → inside.
+    expect(isWithinAvailability(r('2026-11-01T04:00:00Z', '2026-11-01T07:30:00Z'), night, NY)).toBe(true);
+    // 00:00 EDT + 240 min ends at 03:00 EST → still inside; + 270 min (03:30 EST) is not.
+    expect(isWithinAvailability(r('2026-11-01T04:00:00Z', '2026-11-01T08:00:00Z'), night, NY)).toBe(true);
+    expect(isWithinAvailability(r('2026-11-01T04:00:00Z', '2026-11-01T08:30:00Z'), night, NY)).toBe(false);
+    // The repeated hour: 01:30 EDT + 60 min = 01:30 EST. Fits 00:00–03:00, not a 45-minute block.
+    expect(isWithinAvailability(r('2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z'), night, NY)).toBe(true);
+    expect(isWithinAvailability(r('2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z'), [{ weekday: 0, startTime: '01:00', endTime: '01:45', slotMinutes: 15 }], NY)).toBe(false);
+  });
+
+  it('isWithinAvailability rejects a wall-clock end on another date, except midnight of a 24:00 block', () => {
+    const late = [{ weekday: 1, startTime: '22:00', endTime: '24:00', slotMinutes: 30 }];
+    // Mon 23:30–24:00 Riyadh = 20:30–21:00Z
+    expect(isWithinAvailability(r('2026-10-12T20:30:00Z', '2026-10-12T21:00:00Z'), late, RIYADH)).toBe(true);
+    // Mon 23:30 → Tue 00:30: crosses midnight
+    expect(isWithinAvailability(r('2026-10-12T20:30:00Z', '2026-10-12T21:30:00Z'), late, RIYADH)).toBe(false);
+    // 25 hours later lands on the next day at a time that would be "inside" by minutes alone
+    expect(isWithinAvailability(r('2026-10-12T19:00:00Z', '2026-10-13T19:30:00Z'), late, RIYADH)).toBe(false);
+  });
+
   it('findScheduleProblem reports the first failing rule', () => {
     const timeOff = [r('2026-10-12T07:00:00Z', '2026-10-12T08:00:00Z')]; // Mon 10:00–11:00 Riyadh
     expect(findScheduleProblem(r('2026-10-12T06:00:00Z', '2026-10-12T06:30:00Z'), blocks, timeOff, RIYADH)).toBeNull();

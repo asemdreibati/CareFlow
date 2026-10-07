@@ -5,7 +5,8 @@ import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module.js';
 import { PrismaService } from '../src/common/prisma/prisma.service.js';
 import { tenantContext } from '../src/common/tenancy/tenant-context.js';
-import { RemindersService } from '../src/modules/scheduling/reminders.service.js';
+import { NotificationsService } from '../src/modules/notifications/notifications.service.js';
+import { RemindersService, type ReminderPassResult } from '../src/modules/scheduling/reminders.service.js';
 
 /**
  * Scheduling module (docs/SCHEDULING.md §6 and §7) end to end against the local
@@ -111,6 +112,8 @@ describe('Scheduling (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Let asynchronous event listeners (reminder sync, scoring) finish before the DB disconnects.
+    await new Promise((r) => setTimeout(r, 800));
     await app.close();
   });
 
@@ -438,5 +441,126 @@ describe('Scheduling (e2e)', () => {
     const strict = await request(http).get('/api/v1/scheduling/no-show/at-risk').set(auth(ownerToken)).query({ date }).expect(200);
     expect(strict.body.items.every((a: { noShowRisk: number }) => a.noShowRisk >= 0.5)).toBe(true);
     await request(http).get('/api/v1/scheduling/no-show/at-risk').set(auth(ownerToken)).query({ date: '2026-13-40' }).expect(400);
+  });
+
+  // ─────────────────────────────── review regressions ───────────────────────────────
+
+  describe('regressions', () => {
+    const dayAt = (offsetDays: number, hhmmUtc: string) => `${new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10)}T${hhmmUtc}:00.000Z`;
+    async function newPatient(firstName: string) {
+      return (await request(http).post('/api/v1/patients').set(auth(ownerToken)).send({ firstName, lastName: 'Reg' }).expect(201)).body.id as string;
+    }
+    async function newRoom(name: string) {
+      return (await request(http).post('/api/v1/resources').set(auth(ownerToken)).send({ name: `${name} ${ts}`, type: 'ROOM' }).expect(201)).body.id as string;
+    }
+    const overlaps = (a: { to: string; toEndsAt: string }, b: { to: string; toEndsAt: string }) =>
+      new Date(a.to).getTime() < new Date(b.toEndsAt).getTime() && new Date(b.to).getTime() < new Date(a.toEndsAt).getTime();
+
+    it('places one-hour appointments on a 30-minute grid without overlaps and applies them all', async () => {
+      const doc = await createDoctor('Carla', 'Gamma', `Solo-${ts}`);
+      for (let i = 0; i < 6; i++) await book(doc, await newPatient(`Hour${i}`), dayAt(33, `${String(6 + i).padStart(2, '0')}:00`), { durationMinutes: 60 });
+      const res = await request(http)
+        .post('/api/v1/scheduling/reschedule-proposals')
+        .set(auth(ownerToken))
+        .send({ doctorId: doc, startsAt: dayAt(33, '06:00'), endsAt: dayAt(33, '14:00'), createTimeOff: true })
+        .expect(201);
+      const items: { to: string; toEndsAt: string; toDoctorId: string; durationMinutes: number }[] = res.body.items;
+      expect(items).toHaveLength(6);
+      expect(res.body.unresolvedAppointmentIds).toEqual([]);
+      for (let i = 0; i < items.length; i++) {
+        expect(items[i].durationMinutes).toBe(60);
+        for (let j = i + 1; j < items.length; j++) expect(items[i].toDoctorId === items[j].toDoctorId && overlaps(items[i], items[j])).toBe(false);
+      }
+      const applied = await request(http).post(`/api/v1/scheduling/reschedule-proposals/${res.body.id}/apply`).set(auth(ownerToken)).send({}).expect(200);
+      expect(applied.body.status).toBe('APPLIED');
+      expect(applied.body.items.every((i: { applied: boolean; error?: string }) => i.applied && !i.error)).toBe(true);
+    });
+
+    it('apply moves resource bookings with the appointment and refuses a busy resource', async () => {
+      const doc = await createDoctor('Dora', 'Delta', `Rooms-${ts}`);
+      const other = await createDoctor('Eli', 'Echo', `Others-${ts}`);
+      const room = await newRoom('Cascade room');
+      const x = await book(doc, await newPatient('Roomy'), dayAt(35, '07:00'), { durationMinutes: 30, resourceIds: [room] });
+      const res = await request(http)
+        .post('/api/v1/scheduling/reschedule-proposals')
+        .set(auth(ownerToken))
+        .send({ doctorId: doc, startsAt: dayAt(35, '06:30'), endsAt: dayAt(35, '08:00'), createTimeOff: true })
+        .expect(201);
+      const item = res.body.items.find((i: { appointmentId: string }) => i.appointmentId === x.id);
+      expect(item.to).toBeTruthy();
+      const applied = await request(http).post(`/api/v1/scheduling/reschedule-proposals/${res.body.id}/apply`).set(auth(ownerToken)).send({}).expect(200);
+      expect(applied.body.status).toBe('APPLIED');
+      const bookings = await request(http).get(`/api/v1/resources/${room}/bookings`).set(auth(ownerToken)).query({ from: dayAt(34, '00:00'), to: dayAt(50, '00:00') }).expect(200);
+      expect(bookings.body.bookings).toHaveLength(1);
+      expect(bookings.body.bookings[0]).toMatchObject({ appointmentId: x.id, active: true });
+      expect(new Date(bookings.body.bookings[0].startsAt).toISOString()).toBe(item.to);
+      expect(new Date(bookings.body.bookings[0].endsAt).toISOString()).toBe(item.toEndsAt);
+      // The old time is free for the room, the new one is not
+      const p = await newPatient('Other');
+      await request(http).post('/api/v1/appointments').set(auth(ownerToken)).send({ doctorId: other, patientId: p, startsAt: dayAt(35, '07:00'), durationMinutes: 30, resourceIds: [room] }).expect(201);
+      await request(http).post('/api/v1/appointments').set(auth(ownerToken)).send({ doctorId: other, patientId: p, startsAt: item.to, durationMinutes: 30, resourceIds: [room] }).expect(409);
+
+      // A resource taken at the target time: the item records an error and nothing moves.
+      const room2 = await newRoom('Busy room');
+      const y = await book(doc, await newPatient('Stuck'), dayAt(36, '07:00'), { durationMinutes: 30, resourceIds: [room2] });
+      const res2 = await request(http)
+        .post('/api/v1/scheduling/reschedule-proposals')
+        .set(auth(ownerToken))
+        .send({ doctorId: doc, startsAt: dayAt(36, '06:30'), endsAt: dayAt(36, '08:00') })
+        .expect(201);
+      const target = res2.body.items.find((i: { appointmentId: string }) => i.appointmentId === y.id);
+      await request(http).post('/api/v1/appointments').set(auth(ownerToken)).send({ doctorId: other, patientId: p, startsAt: target.to, durationMinutes: 30, resourceIds: [room2] }).expect(201);
+      const applied2 = await request(http).post(`/api/v1/scheduling/reschedule-proposals/${res2.body.id}/apply`).set(auth(ownerToken)).send({}).expect(200);
+      expect(applied2.body.status).toBe('PENDING');
+      const failed = applied2.body.items.find((i: { appointmentId: string }) => i.appointmentId === y.id);
+      expect(failed.applied).toBe(false);
+      expect(failed.error).toMatch(/Busy room .* is not available/);
+      const stuck = await request(http).get(`/api/v1/appointments/${y.id}`).set(auth(ownerToken)).expect(200);
+      expect(new Date(stuck.body.startsAt).toISOString()).toBe(dayAt(36, '07:00'));
+    });
+
+    it('two overlapping reminder passes deliver each reminder once (lease)', async () => {
+      const appt = await book(doctorA, patients[2], dayAt(2, '07:00'));
+      const rows = await poll(async () => {
+        const r = await request(http).get('/api/v1/scheduling/reminders').set(auth(ownerToken)).query({ appointmentId: appt.id }).expect(200);
+        return r.body.length === 3 ? (r.body as { id: string }[]) : undefined;
+      });
+      const notifications = app.get(NotificationsService);
+      const original = notifications.notify.bind(notifications);
+      const calls: string[] = [];
+      notifications.notify = (async (recipients: string[], input: Parameters<NotificationsService['notify']>[1]) => {
+        const data = input.data as { appointmentId?: string; reminderId?: string } | undefined;
+        if (input.type === 'APPOINTMENT_REMINDER' && data?.appointmentId === appt.id) {
+          calls.push(data.reminderId as string);
+          await new Promise((r) => setTimeout(r, 400)); // a slow delivery keeps the first pass in flight
+        }
+        return original(recipients, input);
+      }) as NotificationsService['notify'];
+      const now = new Date(new Date(appt.startsAt).getTime() - 3_600_000);
+      const pass = () =>
+        tenantContext.runSystem(
+          () => (reminders as unknown as { processClinic(clinicId: string, now: Date): Promise<ReminderPassResult> }).processClinic(clinicId, now),
+          { clinicId, requestId: 'test' },
+        );
+      let results: ReminderPassResult[];
+      try {
+        const first = pass();
+        await new Promise((r) => setTimeout(r, 120));
+        results = await Promise.all([first, pass()]);
+      } finally {
+        notifications.notify = original;
+      }
+      expect(calls).toHaveLength(2); // two IN_APP rows
+      expect(new Set(calls).size).toBe(2);
+      const mine = new Set(rows.map((r) => r.id));
+      expect(calls.every((id) => mine.has(id))).toBe(true);
+      expect(results.reduce((n, r) => n + r.sent, 0)).toBeGreaterThanOrEqual(3);
+      const sent = await request(http).get('/api/v1/scheduling/reminders').set(auth(ownerToken)).query({ appointmentId: appt.id, status: 'SENT' }).expect(200);
+      expect(sent.body).toHaveLength(3);
+      // Each row was claimed once and keeps its planned send time
+      expect(sent.body.every((r: { attempts: number; scheduledFor: string }) => r.attempts === 1 && new Date(r.scheduledFor) < new Date(appt.startsAt))).toBe(true);
+      const planned = rows.map((r) => (r as unknown as { scheduledFor: string }).scheduledFor).sort();
+      expect(sent.body.map((r: { scheduledFor: string }) => r.scheduledFor).sort()).toEqual(planned);
+    });
   });
 });

@@ -3,6 +3,9 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module.js';
+import { PrismaService } from '../src/common/prisma/prisma.service.js';
+import { tenantContext } from '../src/common/tenancy/tenant-context.js';
+import { appointmentInclude, AppointmentWriterService } from '../src/modules/waitlist/appointment-writer.service.js';
 import { WaitlistService } from '../src/modules/waitlist/waitlist.service.js';
 
 /**
@@ -13,6 +16,9 @@ describe('Waitlist + series (e2e)', () => {
   let app: INestApplication<App>;
   let http: App;
   let waitlistService: WaitlistService;
+  let prisma: PrismaService;
+  let writer: AppointmentWriterService;
+  let clinicId: string;
 
   const ts = Date.now();
   const slug = `wl-series-${ts}`;
@@ -81,12 +87,15 @@ describe('Waitlist + series (e2e)', () => {
     await app.init();
     http = app.getHttpServer();
     waitlistService = app.get(WaitlistService);
+    prisma = app.get(PrismaService);
+    writer = app.get(AppointmentWriterService);
 
     const reg = await request(http)
       .post('/api/v1/auth/register')
       .send({ clinicName: 'Waitlist Series Clinic', slug, timezone: 'Asia/Riyadh', email: ownerEmail, password, firstName: 'Olive', lastName: 'Owner' })
       .expect(201);
     ownerToken = reg.body.tokens.accessToken;
+    clinicId = reg.body.session.clinic.id;
 
     const member = await request(http)
       .post('/api/v1/members')
@@ -394,6 +403,182 @@ describe('Waitlist + series (e2e)', () => {
       await request(http).patch(`/api/v1/series/${seriesId}`).set(auth(ownerToken)).send({ status: 'CANCELLED' }).expect(409);
       // The slots are free again
       await request(http).post('/api/v1/appointments').set(auth(ownerToken)).send({ doctorId, patientId: patientB, startsAt: at(weekLater(2), '10:00') }).expect(201);
+    });
+  });
+
+  // ─────────────────────────────── review regressions ───────────────────────────────
+
+  describe('hold lifecycle and series regressions', () => {
+    let seq = 0;
+    // Each test gets its own doctor with a unique specialty so no other entry matches its slots.
+    async function newDoctor() {
+      seq++;
+      const doc = await request(http).post('/api/v1/doctors').set(auth(ownerToken)).send({ firstName: `Reg${seq}`, lastName: 'Doc', specialty: `Reg-${ts}-${seq}` }).expect(201);
+      await request(http)
+        .put(`/api/v1/doctors/${doc.body.id}/availability`)
+        .set(auth(ownerToken))
+        .send({ slots: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, startTime: '09:00', endTime: '17:00', slotMinutes: 30 })) })
+        .expect(200);
+      return doc.body.id as string;
+    }
+    async function newPatient(name: string) {
+      return (await request(http).post('/api/v1/patients').set(auth(ownerToken)).send({ firstName: name, lastName: 'Reg' }).expect(201)).body.id as string;
+    }
+    async function bookWith(doc: string, patientId: string, startsAt: string, extra: Record<string, unknown> = {}) {
+      const res = await request(http).post('/api/v1/appointments').set(auth(ownerToken)).send({ doctorId: doc, patientId, startsAt, durationMinutes: 30, ...extra }).expect(201);
+      return res.body as { id: string; startsAt: string };
+    }
+    async function setStatus(id: string, status: string) {
+      return request(http).post(`/api/v1/appointments/${id}/status`).set(auth(ownerToken)).send({ status }).expect(200);
+    }
+    async function enqueue(patientId: string, doc: string, extra: Record<string, unknown> = {}) {
+      return (await request(http).post('/api/v1/waitlist').set(auth(ownerToken)).send({ patientId, doctorId: doc, durationMinutes: 30, ...extra }).expect(201)).body as { id: string };
+    }
+    /** An entry holding an offer for a freshly cancelled slot of `doc` on `date` at `hhmmUtc`. */
+    async function offeredHold(doc: string, date: string, hhmmUtc: string, extra: Record<string, unknown> = {}) {
+      const waiting = await newPatient('Waiting');
+      const entry = await enqueue(waiting, doc, extra);
+      const blocker = await bookWith(doc, await newPatient('Blocker'), at(date, hhmmUtc));
+      await cancelAppointment(blocker.id);
+      const offered = await waitForOffer(entry.id);
+      return { entryId: entry.id, holdId: offered.offeredAppointmentId as string, patientId: waiting };
+    }
+    const later = (hours: number) => new Date(Date.now() + hours * 3_600_000);
+
+    it('a confirmed / checked-in hold is settled and never cancelled by the expiry job', async () => {
+      const doc = await newDoctor();
+      const { entryId: e, holdId } = await offeredHold(doc, day(3), '07:00');
+      await setStatus(holdId, 'CONFIRMED');
+      const confirmed = await getAppointment(holdId);
+      expect(confirmed.holdExpiresAt).toBeNull();
+      expect(confirmed.notes).toBe('Booked from waitlist');
+      expect(await getEntry(e)).toMatchObject({ status: 'BOOKED', offeredAppointmentId: holdId, offerExpiresAt: null });
+      for (const s of ['CHECKED_IN', 'IN_PROGRESS', 'COMPLETED']) await setStatus(holdId, s);
+      await waitlistService.expireHolds(later(25));
+      expect((await getAppointment(holdId)).status).toBe('COMPLETED');
+    });
+
+    it('the expiry job only cancels SCHEDULED holds and settles progressed ones (portal / SMS confirmations)', async () => {
+      const doc = await newDoctor();
+      // Confirmed outside AppointmentsService (as the portal / SMS reply do): the expiry job must not cancel it.
+      const a = await offeredHold(doc, day(3), '08:00');
+      await tenantContext.runSystem(() => prisma.db.appointment.update({ where: { id: a.holdId }, data: { status: 'CONFIRMED' } }));
+      const result = await waitlistService.expireHolds(later(25));
+      expect(result.settled).toBeGreaterThanOrEqual(1);
+      expect(await getAppointment(a.holdId)).toMatchObject({ status: 'CONFIRMED', holdExpiresAt: null });
+      expect((await getEntry(a.entryId)).status).toBe('BOOKED');
+
+      // The appointment.updated event of such a confirmation settles the hold right away.
+      const b = await offeredHold(doc, day(3), '09:00');
+      const row = await tenantContext.run({ requestId: 'test', clinicId }, () =>
+        prisma.transaction((tx) => tx.appointment.update({ where: { id: b.holdId }, data: { status: 'CONFIRMED', version: { increment: 1 } }, include: appointmentInclude })),
+      );
+      await tenantContext.run({ requestId: 'test', clinicId }, async () => writer.emitUpdated(row, 'test'));
+      await poll(async () => ((await getEntry(b.entryId)).status === 'BOOKED' ? true : undefined));
+      expect((await getAppointment(b.holdId)).holdExpiresAt).toBeNull();
+    });
+
+    it('a hold cancelled by staff or marked NO_SHOW sends its entry back to WAITING; stale offers are swept', async () => {
+      const doc = await newDoctor();
+      const a = await offeredHold(doc, day(4), '07:00');
+      await setStatus(a.holdId, 'CANCELLED');
+      expect(await getEntry(a.entryId)).toMatchObject({ status: 'WAITING', offerCount: 1, offeredAppointmentId: null, offerExpiresAt: null });
+
+      const doc2 = await newDoctor();
+      const b = await offeredHold(doc2, day(4), '08:00');
+      await setStatus(b.holdId, 'NO_SHOW');
+      expect(await getEntry(b.entryId)).toMatchObject({ status: 'WAITING', offerCount: 1, offeredAppointmentId: null });
+
+      // An entry left OFFERED for a dead appointment (e.g. by an older writer) is released by the job.
+      await tenantContext.runSystem(() =>
+        prisma.db.waitlistEntry.update({ where: { id: b.entryId }, data: { status: 'OFFERED', offeredAppointmentId: b.holdId, offerExpiresAt: later(-1) } }),
+      );
+      const result = await waitlistService.expireHolds(new Date());
+      expect(result.released).toBeGreaterThanOrEqual(1);
+      expect(await getEntry(b.entryId)).toMatchObject({ status: 'WAITING', offerCount: 2, offeredAppointmentId: null });
+    });
+
+    it('cancelling an accepted waitlist appointment backfills the slot for the next entry', async () => {
+      const doc = await newDoctor();
+      const first = await offeredHold(doc, day(5), '07:00', { priority: 'URGENT' });
+      const second = await enqueue(await newPatient('Second'), doc);
+      const accepted = await request(http).post(`/api/v1/waitlist/${first.entryId}/accept`).set(auth(ownerToken)).expect(200);
+      expect(accepted.body.appointment).toMatchObject({ holdExpiresAt: null, notes: 'Booked from waitlist' });
+      await cancelAppointment(first.holdId);
+      const offered = await waitForOffer(second.id);
+      expect(offered.offeredAppointment.startsAt).toBe(at(day(5), '07:00'));
+      expect((await getEntry(first.entryId)).status).toBe('BOOKED');
+    });
+
+    it('concurrent backfills (series cancel) give one entry exactly one hold', async () => {
+      const doc = await newDoctor();
+      const owner = await newPatient('Series');
+      const series = await request(http)
+        .post('/api/v1/series')
+        .set(auth(ownerToken))
+        .send({ doctorId: doc, patientId: owner, frequency: 'DAILY', startsOn: day(6), startTime: '13:00', durationMinutes: 30, count: 4 })
+        .expect(201);
+      const waiting = await newPatient('Single');
+      const entry = await enqueue(waiting, doc);
+      await request(http).patch(`/api/v1/series/${series.body.series.id}`).set(auth(ownerToken)).send({ status: 'CANCELLED' }).expect(200);
+      const offered = await waitForOffer(entry.id);
+      await sleep(1500); // let every backfill listener finish
+      const appts = await request(http).get('/api/v1/appointments').set(auth(ownerToken)).query({ patientId: waiting, pageSize: 50 }).expect(200);
+      const holds = appts.body.items.filter((a: { status: string }) => a.status !== 'CANCELLED');
+      expect(holds).toHaveLength(1);
+      expect(holds[0].id).toBe((await getEntry(entry.id)).offeredAppointmentId);
+      expect(offered.status).toBe('OFFERED');
+    });
+
+    it('series cancel releases resource bookings', async () => {
+      const doc = await newDoctor();
+      const other = await newDoctor();
+      const p = await newPatient('Room');
+      const room = (await request(http).post('/api/v1/resources').set(auth(ownerToken)).send({ name: `Room ${ts}`, type: 'ROOM' }).expect(201)).body.id as string;
+      const series = await request(http)
+        .post('/api/v1/series')
+        .set(auth(ownerToken))
+        .send({ doctorId: doc, patientId: p, frequency: 'WEEKLY', startsOn: day(30), startTime: '13:00', durationMinutes: 30, count: 2 })
+        .expect(201);
+      const occ = series.body.created[1];
+      await request(http).patch(`/api/v1/appointments/${occ.id}`).set(auth(ownerToken)).send({ resourceIds: [room] }).expect(200);
+      await request(http).patch(`/api/v1/series/${series.body.series.id}`).set(auth(ownerToken)).send({ status: 'CANCELLED' }).expect(200);
+      const bookings = await request(http).get(`/api/v1/resources/${room}/bookings`).set(auth(ownerToken)).query({ from: at(day(29), '00:00'), to: at(day(45), '00:00') }).expect(200);
+      expect(bookings.body.bookings).toHaveLength(1);
+      expect(bookings.body.bookings[0].active).toBe(false);
+      await bookWith(other, p, occ.startsAt, { resourceIds: [room] });
+    });
+
+    it('next-slot never lands in time off loaded before the planned time (moves to the first free slot)', async () => {
+      const doc = await newDoctor();
+      const p = await newPatient('Moved');
+      const D = day(20);
+      // Riyadh: 09:00–10:00 and 12:00–17:00 local are time off; the occurrence is planned at 16:00 local.
+      await request(http).post(`/api/v1/doctors/${doc}/time-off`).set(auth(ownerToken)).send({ startsAt: at(D, '06:00'), endsAt: at(D, '07:00') }).expect(201);
+      await request(http).post(`/api/v1/doctors/${doc}/time-off`).set(auth(ownerToken)).send({ startsAt: at(D, '09:00'), endsAt: at(D, '14:00') }).expect(201);
+      const res = await request(http).post('/api/v1/series').set(auth(ownerToken)).send({ doctorId: doc, patientId: p, frequency: 'DAILY', startsOn: D, startTime: '16:00', durationMinutes: 30, count: 1 }).expect(201);
+      expect(res.body.skipped).toEqual([]);
+      expect(res.body.created[0]).toMatchObject({ startsAt: at(D, '07:00'), isException: true });
+    });
+
+    it('next-slot skips an earlier appointment of the day instead of failing the whole series', async () => {
+      const doc = await newDoctor();
+      const p = await newPatient('Moved2');
+      const D = day(21);
+      await bookWith(doc, await newPatient('Early'), at(D, '06:00'));
+      await request(http).post(`/api/v1/doctors/${doc}/time-off`).set(auth(ownerToken)).send({ startsAt: at(D, '09:00'), endsAt: at(D, '14:00') }).expect(201);
+      const res = await request(http).post('/api/v1/series').set(auth(ownerToken)).send({ doctorId: doc, patientId: p, frequency: 'DAILY', startsOn: D, startTime: '16:00', durationMinutes: 30, count: 3 }).expect(201);
+      expect(res.body.created).toHaveLength(3);
+      expect(res.body.created[0]).toMatchObject({ startsAt: at(D, '06:30'), isException: true });
+      expect(res.body.created[1]).toMatchObject({ startsAt: at(day(22), '13:00'), isException: false });
+    });
+
+    it('rejects an interval above the database bound (52) with 400', async () => {
+      const doc = await newDoctor();
+      const p = await newPatient('Interval');
+      const body = { doctorId: doc, patientId: p, frequency: 'WEEKLY', startsOn: day(10), startTime: '10:00', durationMinutes: 30, count: 1 };
+      await request(http).post('/api/v1/series').set(auth(ownerToken)).send({ ...body, interval: 53 }).expect(400);
+      await request(http).post('/api/v1/series').set(auth(ownerToken)).send({ ...body, interval: 52 }).expect(201);
     });
   });
 });

@@ -5,7 +5,9 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import { paginate } from '../../common/dto/pagination.dto.js';
 import { Permission } from '../../common/permissions/permissions.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
+import { lockIdempotencyKey } from './idempotency.js';
 import { ResourcesService, resourceSummarySelect, type ResourceSummary } from '../resources/resources.service.js';
+import { isHoldSettlingStatus, releaseInactiveAppointment, settleHold } from '../waitlist/hold-lifecycle.js';
 import type { AvailabilityQuery, CalendarQuery, CreateAppointmentDto, ListAppointmentsQuery, SetStatusDto, UpdateAppointmentDto } from './appointments.dto.js';
 import {
   addMinutes,
@@ -14,6 +16,7 @@ import {
   defaultDurationMinutes,
   findScheduleProblem,
   generateSlots,
+  isActiveStatus,
   isFinalStatus,
   isValidDateString,
   INACTIVE_STATUSES,
@@ -175,13 +178,19 @@ export class AppointmentsService {
       ? this.parseDate(dto.endsAt, 'endsAt')
       : addMinutes(startsAt, dto.durationMinutes ?? defaultDurationMinutes(doctor.availability, startsAt, timeZone));
     const range = { startsAt, endsAt };
-    await this.assertBookable(user.clinicId, doctor, range, timeZone);
     const resourceIds = [...new Set(dto.resourceIds ?? [])];
 
     let created: AppointmentWithRelations;
     try {
-      created = await this.withOverlapGuard(() =>
+      await this.assertBookable(user.clinicId, doctor, range, timeZone);
+      const outcome = await this.withOverlapGuard(() =>
         this.prisma.transaction(async (tx) => {
+          if (idempotencyKey) {
+            // Same-key requests serialise here; the loser replays the winner's row
+            // instead of tripping over the overlap constraint.
+            const priorId = await lockIdempotencyKey(tx, user.clinicId, idempotencyKey);
+            if (priorId) return { row: await tx.appointment.findUniqueOrThrow({ where: { id: priorId }, include: detailInclude }), replayed: true };
+          }
           await this.resources.assertAvailable(tx, user.clinicId, resourceIds, range);
           const row = await tx.appointment.create({
             data: {
@@ -203,12 +212,15 @@ export class AppointmentsService {
               data: resourceIds.map((resourceId) => ({ clinicId: user.clinicId, resourceId, appointmentId: row.id, startsAt, endsAt })),
             });
           }
-          return tx.appointment.findUniqueOrThrow({ where: { id: row.id }, include: detailInclude });
+          return { row: await tx.appointment.findUniqueOrThrow({ where: { id: row.id }, include: detailInclude }), replayed: false };
         }),
       );
+      if (outcome.replayed) return { appointment: this.toView(outcome.row), replayed: true };
+      created = outcome.row;
     } catch (err) {
-      // Two concurrent requests with the same key: the loser returns the winner's row.
-      if (idempotencyKey && this.isIdempotencyKeyConflict(err)) {
+      // A concurrent request with the same key may have won (its row now blocks the
+      // slot, or the key itself): on any conflict, replay the winner's row.
+      if (idempotencyKey && (err instanceof ConflictException || this.isIdempotencyKeyConflict(err))) {
         const existing = await this.findByIdempotencyKey(user.clinicId, idempotencyKey);
         if (existing) return { appointment: this.toView(existing), replayed: true };
       }
@@ -220,8 +232,8 @@ export class AppointmentsService {
 
   async update(user: AuthUser, id: string, dto: UpdateAppointmentDto, expectedVersion?: number) {
     const existing = await this.loadForMutation(user, id);
-    if (isFinalStatus(existing.status)) {
-      throw new ConflictException(`A ${existing.status.toLowerCase()} appointment cannot be modified`);
+    if (isFinalStatus(existing.status) || !isActiveStatus(existing.status)) {
+      throw new ConflictException(`A ${existing.status.toLowerCase().replace('_', ' ')} appointment cannot be modified`);
     }
     this.assertExpectedVersion(existing.version, expectedVersion ?? dto.expectedVersion);
     const doctorId = dto.doctorId ?? existing.doctorId;
@@ -272,16 +284,19 @@ export class AppointmentsService {
           },
         });
         if (result.count === 0) throw await this.versionConflict(tx, existing.id);
+        const current = await tx.appointment.findUniqueOrThrow({ where: { id: existing.id }, select: { status: true } });
 
         if (resourceIds) {
           // Replace the booked set; rows of removed resources are deleted.
           if (resourceIds.length === 0) await tx.resourceBooking.deleteMany({ where: { appointmentId: existing.id } });
           else await tx.resourceBooking.deleteMany({ where: { appointmentId: existing.id, resourceId: { notIn: resourceIds } } });
           for (const resourceId of resourceIds) {
+            // Bookings of an inactive (cancelled / no-show) appointment never become active again.
+            const active = isActiveStatus(current.status);
             await tx.resourceBooking.upsert({
               where: { appointmentId_resourceId: { appointmentId: existing.id, resourceId } },
-              update: { startsAt, endsAt, active: true },
-              create: { clinicId: user.clinicId, resourceId, appointmentId: existing.id, startsAt, endsAt },
+              update: { startsAt, endsAt, active },
+              create: { clinicId: user.clinicId, resourceId, appointmentId: existing.id, startsAt, endsAt, active },
             });
           }
         } else if (scheduleChanged) {
@@ -320,9 +335,13 @@ export class AppointmentsService {
         },
       });
       if (result.count === 0) throw await this.versionConflict(tx, existing.id);
-      // Cancelled / no-show appointments release their rooms and equipment.
+      // Cancelled / no-show appointments release their rooms and equipment, and a
+      // waitlist hold among them sends its entry back to WAITING.
       if (INACTIVE_STATUSES.includes(dto.status)) {
-        await tx.resourceBooking.updateMany({ where: { appointmentId: existing.id }, data: { active: false } });
+        await releaseInactiveAppointment(tx, existing.id);
+      } else if (existing.holdExpiresAt && isHoldSettlingStatus(dto.status)) {
+        // A confirmed / checked-in hold is firm: it must never expire, and its entry is BOOKED.
+        await settleHold(tx, existing.id);
       }
       return tx.appointment.findUniqueOrThrow({ where: { id: existing.id }, include: detailInclude });
     });

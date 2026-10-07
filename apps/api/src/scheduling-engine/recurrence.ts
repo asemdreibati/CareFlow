@@ -41,6 +41,9 @@ export interface Occurrence {
 
 export const MAX_OCCURRENCES = 365;
 
+/** Upper bound of `interval` (the database CHECK constraint on appointment_series.interval is 1..52). */
+export const MAX_RECURRENCE_INTERVAL = 52;
+
 /** Upper bound on consecutive periods examined, so a rule that never matches (e.g. day 31 every 12 months from February) terminates. */
 const MAX_PERIODS = 2000;
 
@@ -86,7 +89,7 @@ function isInt(v: unknown): v is number {
 export function validateRecurrenceRule(rule: RecurrenceRule): string | null {
   if (!['DAILY', 'WEEKLY', 'MONTHLY'].includes(rule.frequency)) return 'frequency must be DAILY, WEEKLY or MONTHLY';
   const interval = rule.interval ?? 1;
-  if (!isInt(interval) || interval < 1 || interval > 365) return 'interval must be an integer between 1 and 365';
+  if (!isInt(interval) || interval < 1 || interval > MAX_RECURRENCE_INTERVAL) return `interval must be an integer between 1 and ${MAX_RECURRENCE_INTERVAL}`;
   if (!isValidDateString(rule.startsOn)) return 'startsOn must be a valid YYYY-MM-DD date';
   if (!HHMM.test(rule.startTime)) return 'startTime must be HH:mm';
   if (!isInt(rule.durationMinutes) || rule.durationMinutes < 1) return 'durationMinutes must be a positive integer';

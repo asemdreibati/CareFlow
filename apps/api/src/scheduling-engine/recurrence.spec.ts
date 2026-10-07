@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { zonedParts } from '../modules/appointments/scheduling.js';
-import { addDays, daysInMonth, expandRecurrence, MAX_OCCURRENCES, RecurrenceRuleError, validateRecurrenceRule, type RecurrenceRule } from './recurrence.js';
+import { addDays, daysInMonth, expandRecurrence, MAX_OCCURRENCES, MAX_RECURRENCE_INTERVAL, RecurrenceRuleError, validateRecurrenceRule, type RecurrenceRule } from './recurrence.js';
 
 const BERLIN = 'Europe/Berlin';
 const RIYADH = 'Asia/Riyadh';
@@ -36,6 +36,9 @@ describe('validateRecurrenceRule', () => {
     expect(validateRecurrenceRule({ ...base, startTime: '25:00' })).toMatch(/startTime/);
     expect(validateRecurrenceRule({ ...base, durationMinutes: 0 })).toMatch(/durationMinutes/);
     expect(validateRecurrenceRule({ ...base, interval: 0 })).toMatch(/interval/);
+    // The appointment_series CHECK constraint allows 1..52: 53 must be a 400, not a 500.
+    expect(validateRecurrenceRule({ ...base, interval: MAX_RECURRENCE_INTERVAL + 1 })).toMatch(/between 1 and 52/);
+    expect(validateRecurrenceRule({ ...base, interval: MAX_RECURRENCE_INTERVAL })).toBeNull();
     expect(validateRecurrenceRule({ ...base, count: MAX_OCCURRENCES + 1 })).toMatch(/count/);
     expect(validateRecurrenceRule({ ...base, count: undefined, until: '2026-03-01' })).toMatch(/until/);
     expect(validateRecurrenceRule({ ...base, byWeekday: [1] })).toMatch(/byWeekday/);

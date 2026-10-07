@@ -3,7 +3,9 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { AppointmentStatus, AppointmentType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { APPOINTMENT_EVENTS, type AppointmentEvent } from '../appointments/appointments.service.js';
+import { lockIdempotencyKey } from '../appointments/idempotency.js';
 import { findScheduleProblem, INACTIVE_STATUSES, overlapsAny, type AvailabilityBlock, type TimeRange } from '../appointments/scheduling.js';
+import { releaseInactiveAppointment, settleHold } from './hold-lifecycle.js';
 
 export const doctorSelect = { id: true, userId: true, firstName: true, lastName: true, title: true, specialty: true, color: true } as const;
 export const patientSelect = { id: true, mrn: true, firstName: true, lastName: true, phone: true } as const;
@@ -145,12 +147,51 @@ export class AppointmentWriterService {
     });
   }
 
-  cancel(tx: Prisma.TransactionClient, id: string, cancellationNote: string): Promise<AppointmentRow> {
-    return tx.appointment.update({
+  /**
+   * Cancels the appointment and, in the same transaction, releases its resource
+   * bookings and returns an entry still OFFERED for it (a cancelled hold) to
+   * WAITING. Used by series cancel, portal / SMS-reply cancel and the waitlist.
+   */
+  async cancel(tx: Prisma.TransactionClient, id: string, cancellationNote: string): Promise<AppointmentRow> {
+    const row = await tx.appointment.update({
       where: { id },
       data: { status: 'CANCELLED', cancellationNote, version: { increment: 1 } },
       include: appointmentInclude,
     });
+    await releaseInactiveAppointment(tx, id);
+    return row;
+  }
+
+  /**
+   * Compare-and-set cancel: only cancels when the row still matches `where`
+   * (e.g. still a SCHEDULED hold whose expiry passed). Returns null when another
+   * writer got there first.
+   */
+  async cancelIf(tx: Prisma.TransactionClient, id: string, where: Prisma.AppointmentWhereInput, cancellationNote: string): Promise<AppointmentRow | null> {
+    const res = await tx.appointment.updateMany({
+      where: { ...where, id },
+      data: { status: 'CANCELLED', cancellationNote, version: { increment: 1 } },
+    });
+    if (res.count === 0) return null;
+    await releaseInactiveAppointment(tx, id);
+    return tx.appointment.findUniqueOrThrow({ where: { id }, include: appointmentInclude });
+  }
+
+  /**
+   * A held appointment was confirmed / checked in (by staff, the portal or an SMS
+   * reply): clears `holdExpiresAt` and marks the waitlist entry BOOKED. Idempotent.
+   */
+  settleHold(tx: Prisma.TransactionClient, appointmentId: string): Promise<boolean> {
+    return settleHold(tx, appointmentId);
+  }
+
+  /**
+   * Idempotent bookings outside AppointmentsService (portal): call at the very
+   * start of the booking transaction; returns the id already booked under the key
+   * (replay it) or null. Concurrent requests with the same key serialise here.
+   */
+  lockIdempotencyKey(tx: Prisma.TransactionClient, clinicId: string, idempotencyKey: string): Promise<string | null> {
+    return lockIdempotencyKey(tx, clinicId, idempotencyKey);
   }
 
   /** Translates the exclusion-constraint violation raised by PostgreSQL into a 409. */

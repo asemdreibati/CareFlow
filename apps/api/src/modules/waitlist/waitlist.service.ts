@@ -9,17 +9,29 @@ import { topK } from '../../scheduling-engine/heap.js';
 import { enumerateSlots, freeIntervals } from '../../scheduling-engine/intervals.js';
 import { entryAdmitsSlot, firstAdmittedSlot, rankEntries, type PreferredWindow, type WaitlistCandidate } from '../../scheduling-engine/waitlist-matching.js';
 import type { AppointmentEvent } from '../appointments/appointments.service.js';
-import { addMinutes, defaultDurationMinutes, type TimeRange } from '../appointments/scheduling.js';
+import { addMinutes, defaultDurationMinutes, INACTIVE_STATUSES, type TimeRange } from '../appointments/scheduling.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { ACTIVE_STATUS_FILTER, AppointmentWriterService, appointmentInclude, SYSTEM_ACTOR, type AppointmentRow, type DoctorWithAvailability } from './appointment-writer.service.js';
 import { availabilityIntervals, daysBetween, slotStepMinutes, toInterval } from './day-availability.js';
+import { HOLD_BOOKED_NOTE, HOLD_EXPIRED_NOTE, HOLD_NOTE, HOLD_SETTLING_STATUSES, isHoldSettlingStatus } from './hold-lifecycle.js';
 import type { BookWaitlistDto, CreateWaitlistEntryDto, ListWaitlistQuery, UpdateWaitlistEntryDto } from './waitlist.dto.js';
 
+export { HOLD_BOOKED_NOTE, HOLD_EXPIRED_NOTE, HOLD_NOTE } from './hold-lifecycle.js';
 export const HOLD_HOURS = 24;
 export const MAX_OFFERS = 3;
-export const HOLD_NOTE = 'Waitlist offer';
-export const HOLD_EXPIRED_NOTE = 'Hold expired';
 const MATCH_DAYS = 14;
+const INACTIVE_STATUS_SET = new Set<string>(INACTIVE_STATUSES);
+
+export interface HoldMaintenanceResult {
+  /** Expired SCHEDULED holds cancelled by the job. */
+  expired: number;
+  /** Freed slots offered to the next entry. */
+  reoffered: number;
+  /** Holds (or their entries) found confirmed / checked in and marked BOOKED. */
+  settled: number;
+  /** OFFERED entries whose appointment was gone, returned to WAITING. */
+  released: number;
+}
 const MATCH_LIMIT = 20;
 
 const entryInclude = {
@@ -130,12 +142,13 @@ export class WaitlistService {
     const existing = await this.loadEntry(user.clinicId, id);
     if (existing.status === 'CANCELLED') return (await this.withParties(user.clinicId, [existing]))[0];
     const { entry, hold } = await this.prisma.transaction(async (tx) => {
-      const hold = existing.status === 'OFFERED' && existing.offeredAppointmentId ? await this.cancelHold(tx, existing.offeredAppointmentId, 'Waitlist entry cancelled') : null;
+      // Entry first: the hold's cancellation must not send it back to WAITING.
       const entry = await tx.waitlistEntry.update({
         where: { id: existing.id },
         data: { status: 'CANCELLED', offeredAppointmentId: null, offerExpiresAt: null },
         include: entryInclude,
       });
+      const hold = existing.status === 'OFFERED' && existing.offeredAppointmentId ? await this.cancelHold(tx, existing.offeredAppointmentId, 'Waitlist entry cancelled') : null;
       return { entry, hold };
     });
     if (hold) this.writer.emitCancelled(hold, user.id);
@@ -214,6 +227,9 @@ export class WaitlistService {
 
     const { appointment, entry } = await this.writer.withOverlapGuard(() =>
       this.prisma.transaction(async (tx) => {
+        // Compare-and-set against a concurrent hold / second booking of the same entry.
+        const claim = await tx.waitlistEntry.updateMany({ where: { id: existing.id, status: 'WAITING' }, data: { status: 'BOOKED', offerExpiresAt: null } });
+        if (claim.count === 0) throw new ConflictException('Only WAITING entries can be booked (the entry changed meanwhile)');
         await this.writer.assertBookable(tx, doctor, user.clinicId, range, timeZone);
         const appointment = await this.writer.insert(tx, {
           clinicId: user.clinicId,
@@ -226,7 +242,7 @@ export class WaitlistService {
         });
         const entry = await tx.waitlistEntry.update({
           where: { id: existing.id },
-          data: { status: 'BOOKED', offeredAppointmentId: appointment.id, offerExpiresAt: null },
+          data: { offeredAppointmentId: appointment.id },
           include: entryInclude,
         });
         return { appointment, entry };
@@ -240,15 +256,22 @@ export class WaitlistService {
   async accept(user: AuthUser, id: string) {
     const existing = await this.loadEntry(user.clinicId, id);
     if (existing.status !== 'OFFERED' || !existing.offeredAppointmentId) throw new ConflictException('No offer is pending for this entry');
+    const holdId = existing.offeredAppointmentId;
     const { appointment, entry } = await this.prisma.transaction(async (tx) => {
-      const hold = await tx.appointment.findFirst({ where: { id: existing.offeredAppointmentId as string, clinicId: user.clinicId } });
-      if (!hold || hold.status === 'CANCELLED' || hold.status === 'NO_SHOW') throw new ConflictException('The offered slot is no longer held');
-      const appointment = await tx.appointment.update({
-        where: { id: hold.id },
-        data: { holdExpiresAt: null, version: { increment: 1 } },
-        include: appointmentInclude,
+      // Compare-and-set on both rows: the expiry job (or a staff cancel) may have won the race.
+      const claim = await tx.waitlistEntry.updateMany({
+        where: { id: existing.id, status: 'OFFERED', offeredAppointmentId: holdId },
+        data: { status: 'BOOKED', offerExpiresAt: null },
       });
-      const entry = await tx.waitlistEntry.update({ where: { id: existing.id }, data: { status: 'BOOKED', offerExpiresAt: null }, include: entryInclude });
+      if (claim.count === 0) throw new ConflictException('No offer is pending for this entry');
+      const firm = await tx.appointment.updateMany({
+        where: { id: holdId, clinicId: user.clinicId, status: ACTIVE_STATUS_FILTER },
+        // The note no longer marks a hold: a later cancellation must backfill the slot.
+        data: { holdExpiresAt: null, notes: HOLD_BOOKED_NOTE, version: { increment: 1 } },
+      });
+      if (firm.count === 0) throw new ConflictException('The offered slot is no longer held');
+      const appointment = await tx.appointment.findUniqueOrThrow({ where: { id: holdId }, include: appointmentInclude });
+      const entry = await tx.waitlistEntry.findUniqueOrThrow({ where: { id: existing.id }, include: entryInclude });
       return { appointment, entry };
     });
     this.writer.emitUpdated(appointment, user.id);
@@ -259,13 +282,16 @@ export class WaitlistService {
   async decline(user: AuthUser, id: string) {
     const existing = await this.loadEntry(user.clinicId, id);
     if (existing.status !== 'OFFERED' || !existing.offeredAppointmentId) throw new ConflictException('No offer is pending for this entry');
+    const holdId = existing.offeredAppointmentId;
     const { hold, entry } = await this.prisma.transaction(async (tx) => {
-      const hold = await this.cancelHold(tx, existing.offeredAppointmentId as string, 'Waitlist offer declined');
-      const entry = await tx.waitlistEntry.update({
-        where: { id: existing.id },
+      // Compare-and-set first (vs accept / expiry), then cancel the hold (which finds no OFFERED entry left to release).
+      const claim = await tx.waitlistEntry.updateMany({
+        where: { id: existing.id, status: 'OFFERED', offeredAppointmentId: holdId },
         data: { status: 'WAITING', offeredAppointmentId: null, offerExpiresAt: null, offerCount: { increment: 1 } },
-        include: entryInclude,
       });
+      if (claim.count === 0) throw new ConflictException('No offer is pending for this entry');
+      const hold = await this.cancelHold(tx, holdId, 'Waitlist offer declined');
+      const entry = await tx.waitlistEntry.findUniqueOrThrow({ where: { id: existing.id }, include: entryInclude });
       return { hold, entry };
     });
     if (hold) this.writer.emitCancelled(hold, user.id);
@@ -276,16 +302,33 @@ export class WaitlistService {
 
   /**
    * Reacts to `appointment.cancelled`: offers the freed interval to the best
-   * waiting entry. Cancelled holds (declined / expired offers) are skipped — the
-   * expiry job re-runs backfill itself, and a declined slot is not re-offered.
+   * waiting entry. Cancelled holds that were never taken (declined / expired /
+   * withdrawn offers, still carrying `holdExpiresAt`) are skipped — the expiry
+   * job re-runs backfill itself, and a declined slot is not re-offered. An
+   * accepted or confirmed waitlist appointment has no `holdExpiresAt` any more
+   * and is backfilled like any other appointment.
    */
   async onAppointmentCancelled(e: AppointmentEvent & { holdExpiresAt?: Date | string | null }) {
     try {
-      if (e.holdExpiresAt || e.notes === HOLD_NOTE) return;
+      if (e.holdExpiresAt) return;
       const freed = { startsAt: new Date(e.startsAt), endsAt: new Date(e.endsAt) };
       await this.backfill(e.clinicId, e.doctorId, freed, e.actorUserId ?? SYSTEM_ACTOR);
     } catch (err) {
       this.logger.error(`Waitlist backfill failed for appointment ${e.id}: ${(err as Error).message}`, (err as Error).stack);
+    }
+  }
+
+  /**
+   * Reacts to `appointment.updated` / `appointment.checked_in`: a hold that was
+   * confirmed or checked in by any path (staff, portal, SMS reply) becomes firm —
+   * `holdExpiresAt` is cleared and the entry is BOOKED. Never throws.
+   */
+  async onAppointmentProgressed(e: AppointmentEvent) {
+    if (!e.holdExpiresAt || !isHoldSettlingStatus(e.status)) return;
+    try {
+      await this.prisma.transaction((tx) => this.writer.settleHold(tx, e.id));
+    } catch (err) {
+      this.logger.error(`Settling hold ${e.id} failed: ${(err as Error).message}`, (err as Error).stack);
     }
   }
 
@@ -339,8 +382,10 @@ export class WaitlistService {
         this.prisma.transaction(async (tx) => {
           const patient = await tx.patient.findFirst({ where: { id: entry.patientId, clinicId, isActive: true }, select: { id: true } });
           if (!patient) throw new BadRequestException('Patient is not active');
-          const current = await tx.waitlistEntry.findFirst({ where: { id: entry.id, status: 'WAITING' }, select: { id: true } });
-          if (!current) throw new ConflictException('Entry is no longer waiting');
+          // Claim the entry first (compare-and-set): concurrent backfills (e.g. a whole
+          // series cancelled at once) block here and give up once it is OFFERED.
+          const claim = await tx.waitlistEntry.updateMany({ where: { id: entry.id, status: 'WAITING' }, data: { status: 'OFFERED', offerExpiresAt: expiresAt } });
+          if (claim.count === 0) throw new ConflictException('Entry is no longer waiting');
           await this.writer.assertBookable(tx, doctor, clinicId, slot, timeZone);
           const created = await this.writer.insert(tx, {
             clinicId,
@@ -354,10 +399,7 @@ export class WaitlistService {
             createdById: entry.createdById ?? (actorUserId === SYSTEM_ACTOR ? null : actorUserId),
             holdExpiresAt: expiresAt,
           });
-          await tx.waitlistEntry.update({
-            where: { id: entry.id },
-            data: { status: 'OFFERED', offeredAppointmentId: created.id, offerExpiresAt: expiresAt },
-          });
+          await tx.waitlistEntry.update({ where: { id: entry.id }, data: { offeredAppointmentId: created.id } });
           return created;
         }),
       );
@@ -391,21 +433,29 @@ export class WaitlistService {
   }
 
   /**
-   * Cancels held appointments whose hold expired before `now` (per clinic, in a
-   * system context), returns their entries to WAITING (offerCount + 1) and
-   * re-runs backfill for the freed slot for the next candidate. Never throws.
+   * Hold maintenance per clinic (system context), never throws:
+   * - SCHEDULED holds whose expiry passed are cancelled (compare-and-set, so a
+   *   hold confirmed / checked in meanwhile is never touched), their entries wait
+   *   again (offerCount + 1) and backfill re-runs for the freed slot;
+   * - holds that progressed (confirmed, checked in, …) but still carry
+   *   `holdExpiresAt` are settled (entry BOOKED);
+   * - OFFERED entries whose offer expired but whose appointment is no longer an
+   *   active hold (cancelled / no-show / gone) wait again.
    */
-  async expireHolds(now = new Date()): Promise<{ expired: number; reoffered: number }> {
-    const result = { expired: 0, reoffered: 0 };
+  async expireHolds(now = new Date()): Promise<HoldMaintenanceResult> {
+    const result: HoldMaintenanceResult = { expired: 0, reoffered: 0, settled: 0, released: 0 };
     let clinicIds: string[] = [];
     try {
       clinicIds = await tenantContext.runSystem(async () => {
-        const rows = await this.prisma.db.appointment.findMany({
-          where: { holdExpiresAt: { lt: now }, status: ACTIVE_STATUS_FILTER },
-          distinct: ['clinicId'],
-          select: { clinicId: true },
-        });
-        return rows.map((r) => r.clinicId);
+        const [holds, entries] = await Promise.all([
+          this.prisma.db.appointment.findMany({
+            where: { OR: [{ holdExpiresAt: { lt: now }, status: 'SCHEDULED' }, { holdExpiresAt: { not: null }, status: { in: [...HOLD_SETTLING_STATUSES] } }] },
+            distinct: ['clinicId'],
+            select: { clinicId: true },
+          }),
+          this.prisma.db.waitlistEntry.findMany({ where: { status: 'OFFERED', offerExpiresAt: { lt: now } }, distinct: ['clinicId'], select: { clinicId: true } }),
+        ]);
+        return [...new Set([...holds, ...entries].map((r) => r.clinicId))];
       });
     } catch (err) {
       this.logger.error(`Hold expiry: could not list clinics: ${(err as Error).message}`);
@@ -417,6 +467,8 @@ export class WaitlistService {
         const r = await tenantContext.runSystem(() => this.expireClinicHolds(clinicId, now), { clinicId });
         result.expired += r.expired;
         result.reoffered += r.reoffered;
+        result.settled += r.settled;
+        result.released += r.released;
       } catch (err) {
         this.logger.error(`Hold expiry failed for clinic ${clinicId}: ${(err as Error).message}`, (err as Error).stack);
       }
@@ -424,32 +476,68 @@ export class WaitlistService {
     return result;
   }
 
-  private async expireClinicHolds(clinicId: string, now: Date) {
-    const result = { expired: 0, reoffered: 0 };
+  private async expireClinicHolds(clinicId: string, now: Date): Promise<HoldMaintenanceResult> {
+    const result: HoldMaintenanceResult = { expired: 0, reoffered: 0, settled: 0, released: 0 };
+
+    // 1. Holds the patient already took: never expire them, settle them.
+    const progressed = await this.prisma.db.appointment.findMany({
+      where: { clinicId, holdExpiresAt: { not: null }, status: { in: [...HOLD_SETTLING_STATUSES] } },
+      select: { id: true },
+    });
+    for (const row of progressed) {
+      try {
+        if (await this.prisma.transaction((tx) => this.writer.settleHold(tx, row.id))) result.settled++;
+      } catch (err) {
+        this.logger.error(`Hold ${row.id} could not be settled: ${(err as Error).message}`);
+      }
+    }
+
+    // 2. Expired holds that are still only SCHEDULED.
     const holds = await this.prisma.db.appointment.findMany({
-      where: { clinicId, holdExpiresAt: { lt: now }, status: ACTIVE_STATUS_FILTER },
+      where: { clinicId, holdExpiresAt: { lt: now }, status: 'SCHEDULED' },
       select: { id: true, doctorId: true, startsAt: true, endsAt: true },
       orderBy: { holdExpiresAt: 'asc' },
     });
     for (const hold of holds) {
       try {
         const { cancelled, entryId } = await this.prisma.transaction(async (tx) => {
-          const cancelled = await this.writer.cancel(tx, hold.id, HOLD_EXPIRED_NOTE);
           const entries = await tx.waitlistEntry.findMany({ where: { clinicId, offeredAppointmentId: hold.id, status: 'OFFERED' }, select: { id: true } });
-          if (entries.length > 0) {
-            await tx.waitlistEntry.updateMany({
-              where: { id: { in: entries.map((e) => e.id) } },
-              data: { status: 'WAITING', offeredAppointmentId: null, offerExpiresAt: null, offerCount: { increment: 1 } },
-            });
-          }
+          // Compare-and-set: loses against a concurrent accept / confirm / check-in / cancel.
+          const cancelled = await this.writer.cancelIf(tx, hold.id, { clinicId, status: 'SCHEDULED', holdExpiresAt: { lt: now } }, HOLD_EXPIRED_NOTE);
           return { cancelled, entryId: entries[0]?.id };
         });
+        if (!cancelled) continue;
         result.expired++;
         this.writer.emitCancelled(cancelled, SYSTEM_ACTOR);
         const reoffered = await this.backfill(clinicId, hold.doctorId, { startsAt: hold.startsAt, endsAt: hold.endsAt }, SYSTEM_ACTOR, entryId);
         if (reoffered) result.reoffered++;
       } catch (err) {
         this.logger.error(`Hold ${hold.id} could not be expired: ${(err as Error).message}`);
+      }
+    }
+
+    // 3. Offers stuck in OFFERED although their appointment is no longer an active hold.
+    const stale = await this.prisma.db.waitlistEntry.findMany({
+      where: { clinicId, status: 'OFFERED', offerExpiresAt: { lt: now } },
+      select: { id: true, offeredAppointmentId: true, offeredAppointment: { select: { status: true, holdExpiresAt: true } } },
+    });
+    for (const entry of stale) {
+      const appt = entry.offeredAppointment;
+      if (appt && appt.status === 'SCHEDULED' && appt.holdExpiresAt) continue; // still a live hold (handled above once expired)
+      try {
+        const firm = !!appt && !INACTIVE_STATUS_SET.has(appt.status);
+        const res = await this.prisma.db.waitlistEntry.updateMany({
+          where: { id: entry.id, status: 'OFFERED', offeredAppointmentId: entry.offeredAppointmentId },
+          data: firm
+            ? { status: 'BOOKED', offerExpiresAt: null }
+            : { status: 'WAITING', offeredAppointmentId: null, offerExpiresAt: null, offerCount: { increment: 1 } },
+        });
+        if (res.count > 0) {
+          if (firm) result.settled++;
+          else result.released++;
+        }
+      } catch (err) {
+        this.logger.error(`Waitlist entry ${entry.id} could not be released: ${(err as Error).message}`);
       }
     }
     return result;

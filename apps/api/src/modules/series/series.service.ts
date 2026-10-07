@@ -4,7 +4,7 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { enumerateSlots, freeIntervals, normalize, overlapsSorted, type Interval } from '../../scheduling-engine/intervals.js';
 import { addDays, expandRecurrence, RecurrenceRuleError, type Occurrence, type RecurrenceRule } from '../../scheduling-engine/recurrence.js';
-import { findScheduleProblem, type TimeRange } from '../appointments/scheduling.js';
+import { dayBounds, findScheduleProblem, type TimeRange } from '../appointments/scheduling.js';
 import { AppointmentWriterService, appointmentInclude, type AppointmentRow, type DoctorWithAvailability } from '../waitlist/appointment-writer.service.js';
 import { availabilityIntervals, slotStepMinutes, toInterval, toRange } from '../waitlist/day-availability.js';
 import type { CreateSeriesDto, ListSeriesQuery, UpdateSeriesDto } from './series.dto.js';
@@ -71,8 +71,10 @@ export class SeriesService {
     if (occurrences[0].startsAt < now) throw new BadRequestException('The first occurrence must be in the future');
     const resolve = dto.resolve ?? 'next-slot';
 
+    // next-slot may move an occurrence earlier on its planned day: busy time and
+    // time off are loaded from the start of the first occurrence's calendar day.
     const searchWindow: TimeRange = {
-      startsAt: occurrences[0].startsAt,
+      startsAt: dayBounds(occurrences[0].date, timeZone).startsAt,
       endsAt: new Date(occurrences[occurrences.length - 1].endsAt.getTime() + (NEXT_SLOT_DAYS + 1) * 86_400_000),
     };
 
@@ -172,7 +174,7 @@ export class SeriesService {
         conflicts.push(entry);
         continue;
       }
-      const moved = this.findNextSlot(occurrence, doctor, timeOffIntervals, busy, timeZone, now);
+      const moved = this.findNextSlot(occurrence, doctor, timeOff, timeOffIntervals, busy, timeZone, now);
       if (!moved) {
         skipped.push({ ...entry, reason: `${problem}; no free slot within ${NEXT_SLOT_DAYS} days` });
         continue;
@@ -186,21 +188,34 @@ export class SeriesService {
   /**
    * `next-slot`: the earliest free slot on the planned day (preferring one at or
    * after the planned time), else the earliest free slot on one of the next
-   * NEXT_SLOT_DAYS days.
+   * NEXT_SLOT_DAYS days. Every candidate is re-validated with the same rules as
+   * a booking (availability incl. DST, time off, overlap) before it is accepted.
    */
-  private findNextSlot(occurrence: Occurrence, doctor: DoctorWithAvailability, timeOff: readonly Interval[], busy: readonly Interval[], timeZone: string, now: Date): TimeRange | null {
+  private findNextSlot(
+    occurrence: Occurrence,
+    doctor: DoctorWithAvailability,
+    timeOff: readonly TimeRange[],
+    timeOffIntervals: readonly Interval[],
+    busy: readonly Interval[],
+    timeZone: string,
+    now: Date,
+  ): TimeRange | null {
     const durationMs = occurrence.endsAt.getTime() - occurrence.startsAt.getTime();
     const planned = occurrence.startsAt.getTime();
-    const blocked = normalize([...busy, ...timeOff]);
+    const blocked = normalize([...busy, ...timeOffIntervals]);
     for (let d = 0; d <= NEXT_SLOT_DAYS; d++) {
       const date = addDays(occurrence.date, d);
       const availability = availabilityIntervals(doctor.availability, date, timeZone);
       if (availability.length === 0) continue;
       const free = freeIntervals(availability, blocked, durationMs);
       const slots = enumerateSlots(free, durationMs, slotStepMinutes(doctor.availability, date) * 60_000).filter((s) => s.start >= now.getTime());
-      if (slots.length === 0) continue;
-      const pick = d === 0 ? (slots.find((s) => s.start >= planned) ?? slots[0]) : slots[0];
-      return toRange(pick);
+      const ordered = d === 0 ? [...slots.filter((s) => s.start >= planned), ...slots.filter((s) => s.start < planned)] : slots;
+      for (const slot of ordered) {
+        const range = toRange(slot);
+        if (findScheduleProblem(range, doctor.availability, timeOff, timeZone)) continue;
+        if (overlapsSorted(busy, slot)) continue;
+        return range;
+      }
     }
     return null;
   }

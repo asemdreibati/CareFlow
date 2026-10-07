@@ -4,8 +4,9 @@ import type { Prisma, ProposalStatus, RescheduleProposal } from '@prisma/client'
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { firstEndingAfter, freeIntervals, normalize, overlapsSorted, type Interval } from '../../scheduling-engine/intervals.js';
-import { minCostAssignment } from '../../scheduling-engine/matching.js';
+import { disjointAssignment } from '../../scheduling-engine/matching.js';
 import { APPOINTMENT_EVENTS, type AppointmentEvent } from '../appointments/appointments.service.js';
+import { ResourcesService } from '../resources/resources.service.js';
 import { blocksForWeekday, findScheduleProblem, weekdayOfDate, zonedParts, zonedTimeToUtc, type AvailabilityBlock } from '../appointments/scheduling.js';
 import type { ApplyProposalDto, CreateProposalDto, TimeOffImpactDto } from './scheduling.dto.js';
 import { addDays, BLOCKING_STATUSES, errorMessage, eventInclude, MOVABLE_STATUSES, toAppointmentEvent, type AppointmentWithEventRelations } from './scheduling.common.js';
@@ -16,7 +17,6 @@ const DEFAULT_SEARCH_DAYS = 14;
 const MAX_CANDIDATES = 2000;
 const DOCTOR_CHANGE_COST = 240;
 const WEEKDAY_CHANGE_COST = 60;
-const MAX_REPAIR_ROUNDS = 6;
 const PROPOSAL_LIST_LIMIT = 100;
 
 /** One line of a proposal (stored as JSON on `reschedule_proposals.items`). */
@@ -93,6 +93,7 @@ export class RescheduleService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
+    private readonly resources: ResourcesService,
   ) {}
 
   // ─────────────────────────────── preview / create ───────────────────────────────
@@ -229,16 +230,25 @@ export class RescheduleService {
         if (overlapsSorted(busy, { start: startsAt.getTime(), end: endsAt.getTime() })) {
           throw new Error('The proposed slot overlaps another appointment for the doctor');
         }
+        // Rooms / equipment move with the appointment and must be free at the new time.
+        const bookings = await tx.resourceBooking.findMany({ where: { appointmentId: appt.id, active: true }, select: { resourceId: true } });
+        if (bookings.length > 0) {
+          await this.resources.assertAvailable(tx, clinicId, bookings.map((b) => b.resourceId), { startsAt, endsAt }, appt.id);
+        }
         const res = await tx.appointment.updateMany({
           where: { id: appt.id, clinicId, version: appt.version },
           data: { doctorId: toDoctorId, startsAt, endsAt, version: { increment: 1 }, ...(appt.seriesId ? { isException: true } : {}) },
         });
         if (res.count === 0) throw new Error(`Appointment was modified by someone else (version ${appt.version})`);
+        await tx.resourceBooking.updateMany({ where: { appointmentId: appt.id }, data: { startsAt, endsAt } });
         return tx.appointment.findUniqueOrThrow({ where: { id: appt.id }, include: eventInclude });
       });
     } catch (err) {
       if (err instanceof Error && err.message.includes('appointments_no_overlap')) {
         throw new Error('The proposed slot overlaps another appointment for the doctor (database constraint)');
+      }
+      if (err instanceof Error && err.message.includes('resource_bookings_no_overlap')) {
+        throw new Error('One of the booked resources is not available at the proposed time (database constraint)');
       }
       throw err;
     }
@@ -371,41 +381,14 @@ export class RescheduleService {
   }
 
   /**
-   * Min-cost matching with an overlap repair loop: the grid guarantees distinct
-   * starts, not disjoint ranges (a 60-minute appointment on a 30-minute grid can
-   * collide with its neighbour). Colliding pairs forbid the costlier edge and the
-   * matching is re-solved, a bounded number of times.
+   * Min-cost matching whose placements never overlap on the same doctor: the
+   * grid guarantees distinct starts, not disjoint ranges (a 60-minute appointment
+   * on a 30-minute grid can collide with its neighbour). See `disjointAssignment`
+   * for the repair loop (bounded by the number of candidate columns).
    */
   private solve(matrix: number[][], displaced: readonly DisplacedRow[], candidates: readonly Candidate[]): number[] {
-    let assignment: number[] = [];
-    for (let round = 0; round < MAX_REPAIR_ROUNDS; round++) {
-      assignment = minCostAssignment(matrix).assignment;
-      const byDoctor = new Map<string, { row: number; col: number; start: number; end: number }[]>();
-      assignment.forEach((col, row) => {
-        if (col < 0) return;
-        const c = candidates[col];
-        const a = displaced[row];
-        const entry = { row, col, start: c.start, end: c.start + (a.endsAt.getTime() - a.startsAt.getTime()) };
-        const list = byDoctor.get(c.doctorId);
-        if (list) list.push(entry);
-        else byDoctor.set(c.doctorId, [entry]);
-      });
-      let changed = false;
-      for (const list of byDoctor.values()) {
-        list.sort((x, y) => x.start - y.start);
-        for (let i = 1; i < list.length; i++) {
-          const prev = list[i - 1];
-          const cur = list[i];
-          if (prev.end > cur.start) {
-            const loser = matrix[prev.row][prev.col] >= matrix[cur.row][cur.col] ? prev : cur;
-            matrix[loser.row][loser.col] = Infinity;
-            changed = true;
-          }
-        }
-      }
-      if (!changed) return assignment;
-    }
-    return assignment;
+    const durations = displaced.map((a) => a.endsAt.getTime() - a.startsAt.getTime());
+    return disjointAssignment(matrix, durations, candidates.map((c) => ({ group: c.doctorId, start: c.start }))).assignment;
   }
 
   /** Grid-aligned free starts of one doctor inside `window` (epoch ms), with the free gap end for duration checks. */

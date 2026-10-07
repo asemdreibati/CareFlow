@@ -207,10 +207,7 @@ export function isValidDateString(date: string): boolean {
 
 /** Start (inclusive) and end (exclusive) instants of a calendar day in `timeZone`. */
 export function dayBounds(date: string, timeZone: string): TimeRange {
-  const [y, m, d] = date.split('-').map(Number);
-  const next = new Date(Date.UTC(y, m - 1, d + 1));
-  const nextDate = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
-  return { startsAt: zonedTimeToUtc(date, '00:00', timeZone), endsAt: zonedTimeToUtc(nextDate, '00:00', timeZone) };
+  return { startsAt: zonedTimeToUtc(date, '00:00', timeZone), endsAt: zonedTimeToUtc(nextDate(date), '00:00', timeZone) };
 }
 
 // ─────────────────────────────── availability ───────────────────────────────
@@ -235,16 +232,43 @@ export function defaultDurationMinutes(blocks: readonly AvailabilityBlock[], sta
 
 /**
  * True when the whole range fits inside one availability block of the weekday on
- * which it starts (wall clock in `timeZone`).
+ * which it starts (wall clock in `timeZone`). Both ends are compared on the wall
+ * clock, so a range crossing a DST change inside the day is judged by the clock
+ * on the wall (spring forward: 01:30 + 60 min ends at 03:30; fall back: 00:00 +
+ * 210 min ends at 02:30). A range whose wall-clock end falls on another date is
+ * rejected, except an end at exactly midnight (a block ending at 24:00).
  */
 export function isWithinAvailability(range: TimeRange, blocks: readonly AvailabilityBlock[], timeZone: string): boolean {
   if (range.endsAt.getTime() <= range.startsAt.getTime()) return false;
   const p = zonedParts(range.startsAt, timeZone);
+  const e = zonedParts(range.endsAt, timeZone);
   const startMin = p.hour * 60 + p.minute + p.second / 60;
-  const endMin = startMin + durationMinutes(range);
-  return blocksForWeekday(blocks, p.weekday).some(
-    (b) => hhmmToMinutes(b.startTime) <= startMin && endMin <= hhmmToMinutes(b.endTime),
-  );
+  let endMin = e.hour * 60 + e.minute + e.second / 60;
+  if (e.date !== p.date) {
+    // Only "24:00" of the start date is acceptable as an end on the next date.
+    if (endMin !== 0 || e.date !== nextDate(p.date)) return false;
+    endMin = 1440;
+  }
+  // Fall back can make the wall-clock end precede the start (01:30 EDT + 45 min = 01:15 EST).
+  const lo = Math.min(startMin, endMin);
+  const hi = Math.max(startMin, endMin);
+  const realMinutes = durationMinutes(range);
+  return blocksForWeekday(blocks, p.weekday).some((b) => {
+    const bStart = hhmmToMinutes(b.startTime);
+    const bEnd = hhmmToMinutes(b.endTime);
+    if (bStart > lo || hi > bEnd) return false;
+    if (endMin > startMin) return true;
+    // Wall clock went backwards: the elapsed time must still fit in the block's real length.
+    const blockEnd = bEnd >= 1440 ? zonedTimeToUtc(nextDate(p.date), '00:00', timeZone) : zonedTimeToUtc(p.date, b.endTime, timeZone);
+    return realMinutes <= (blockEnd.getTime() - zonedTimeToUtc(p.date, b.startTime, timeZone).getTime()) / 60_000;
+  });
+}
+
+/** "YYYY-MM-DD" of the following calendar day. */
+function nextDate(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + 1));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
 }
 
 export interface GenerateSlotsInput {
