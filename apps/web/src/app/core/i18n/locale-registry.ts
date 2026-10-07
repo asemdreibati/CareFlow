@@ -54,4 +54,14 @@ export function setClinicTimeZone(source: 'staff' | 'portal', tz: string | null 
   setClinicTimeZoneSource(source, () => tz);
 }
 export function setPortalMode(on: boolean): void { portalMode.set(on); }
+/**
+ * Back to "unknown clinic zone, staff mode". The registry is module state shared by every spec
+ * in a test run, so specs that depend on the runtime zone call this first and specs that set a
+ * zone call it afterwards; otherwise results depend on spec execution order.
+ */
+export function resetClinicTimeZone(): void {
+  staffSource.set(() => null);
+  portalSource.set(() => null);
+  portalMode.set(false);
+}
 export function isPortalMode(): boolean { return portalMode(); }

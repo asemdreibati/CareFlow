@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { resetClinicTimeZone } from '../../core/i18n/locale-registry';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { HOUR_PX, layoutDay } from './calendar';
 import { Appointment } from '../../core/models';
+
+// These specs assume the runtime time zone: clear any clinic zone left by other specs.
+beforeEach(() => resetClinicTimeZone());
 
 const appt = (id: string, start: string, end: string): Appointment =>
   ({ id, doctorId: 'd', patientId: 'p', startsAt: new Date(start).toISOString(), endsAt: new Date(end).toISOString(), status: 'SCHEDULED', createdAt: '', updatedAt: '' }) as Appointment;

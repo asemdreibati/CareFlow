@@ -1,3 +1,4 @@
+import { needsPatientSelection } from '../portal.models';
 import { Component, DestroyRef, computed, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -49,6 +50,14 @@ import { PortalAuthService } from '../portal-auth.service';
             <h1 class="pt-title">{{ 'portal.login.codeTitle' | translate }}</h1>
             <p class="pt-muted">{{ 'portal.login.codeSent' | translate: { phone: sentTo() } }}</p>
             @if (error()) { <div class="pt-alert error">{{ error() }}</div> }
+            @if (candidates().length) {
+              <div class="pt-card" role="group" [attr.aria-label]="'portal.login.choosePatient' | translate">
+                <p class="pt-muted">{{ 'portal.login.choosePatient' | translate }}</p>
+                @for (c of candidates(); track c.id) {
+                  <button type="button" class="pt-btn block" [disabled]="loading()" (click)="choose(c.id)"><bdi>{{ c.displayName }}</bdi></button>
+                }
+              </div>
+            } @else {
             <form class="pt-card" (ngSubmit)="verify()" novalidate>
               <div class="pt-field">
                 <label for="code">{{ 'portal.login.code' | translate }}</label>
@@ -63,6 +72,7 @@ import { PortalAuthService } from '../portal-auth.service';
                 <button type="button" class="pt-btn ghost sm" (click)="changePhone()">{{ 'portal.login.changePhone' | translate }}</button>
               </div>
             </form>
+            }
           </div>
         }
         <p class="pt-hint" style="text-align:center;margin-top:24px">{{ 'portal.login.footer' | translate }}</p>
@@ -86,6 +96,9 @@ export class PortalLoginPage {
   slug = this.auth.clinicSlug() ?? '';
   phone = '';
   readonly step = signal<'phone' | 'code'>('phone');
+  /** Patients sharing the verified phone; non-empty while the person must choose. */
+  readonly candidates = signal<{ id: string; displayName: string }[]>([]);
+  private selectionToken: string | null = null;
   readonly code = signal('');
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
@@ -129,7 +142,7 @@ export class PortalLoginPage {
     });
   }
   resend() { if (this.countdown().canResend) this.requestOtp(true); }
-  changePhone() { this.step.set('phone'); this.code.set(''); this.error.set(null); this.codeTouched.set(false); }
+  changePhone() { this.step.set('phone'); this.code.set(''); this.error.set(null); this.codeTouched.set(false); this.candidates.set([]); this.selectionToken = null; }
 
   verify() {
     this.codeTouched.set(true);
@@ -137,12 +150,39 @@ export class PortalLoginPage {
     this.loading.set(true);
     this.error.set(null);
     this.api.verify(this.effectiveSlug(), this.sentTo(), this.code()).subscribe({
-      next: () => {
-        const redirect = this.route.snapshot.queryParamMap.get('redirect');
-        void this.router.navigateByUrl(redirect && redirect.startsWith('/portal/app') ? redirect : '/portal/app');
+      next: (res) => {
+        if (needsPatientSelection(res)) {
+          // Several patients share this phone (e.g. a parent and a child): ask who is signing in.
+          this.loading.set(false);
+          this.selectionToken = res.selectionToken;
+          this.candidates.set(res.candidates);
+          return;
+        }
+        this.enterApp();
       },
       error: (err: unknown) => { this.loading.set(false); this.error.set(this.describe(err, 'portal.login.failed')); },
     });
+  }
+
+  choose(patientId: string) {
+    if (!this.selectionToken) return;
+    this.loading.set(true);
+    this.error.set(null);
+    this.api.selectPatient(this.selectionToken, patientId).subscribe({
+      next: () => this.enterApp(),
+      error: (err: unknown) => {
+        // The selection token is short-lived: start over from the code step.
+        this.loading.set(false);
+        this.candidates.set([]);
+        this.selectionToken = null;
+        this.error.set(this.describe(err, 'portal.login.failed'));
+      },
+    });
+  }
+
+  private enterApp() {
+    const redirect = this.route.snapshot.queryParamMap.get('redirect');
+    void this.router.navigateByUrl(redirect && redirect.startsWith('/portal/app') ? redirect : '/portal/app');
   }
 
   private describe(err: unknown, fallbackKey = 'portal.errors.generic'): string {

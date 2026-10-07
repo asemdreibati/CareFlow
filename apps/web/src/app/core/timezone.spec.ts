@@ -1,3 +1,4 @@
+import { resetClinicTimeZone } from './i18n/locale-registry';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
@@ -13,6 +14,9 @@ import { addDaysToKey, dayBounds, minutesOfDay, startOfWeekKey, zonedParts, zone
 import { CAL_START, GRID_PX, HOUR_PX, layoutDay } from '../pages/calendar/calendar';
 import { seriesAnchor } from '../pages/calendar/booking-dialog';
 import { nextDays, slotWindow } from '../portal/pages/book';
+
+// The clinic-zone registry is shared module state: leave it clean for other specs.
+afterEach(() => resetClinicTimeZone());
 
 /**
  * Clinic-timezone regressions. The test process runs in UTC, so Asia/Riyadh (UTC+3, no DST) makes any

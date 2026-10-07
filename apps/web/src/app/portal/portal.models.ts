@@ -9,6 +9,12 @@ export type PortalLocale = 'ar' | 'en';
 export interface PortalPatient { id: string; firstName: string; lastName: string; locale?: PortalLocale | null; }
 export interface PortalClinic { name: string; slug: string; timezone: string; currency: string; }
 export interface PortalVerifyResponse { accessToken: string; patient: PortalPatient; clinic: PortalClinic; }
+/** Returned by verify when several patients of the clinic share the phone number. */
+export interface PortalSelectionRequired { requiresPatientSelection: true; candidates: { id: string; displayName: string }[]; selectionToken: string; }
+export type PortalVerifyResult = PortalVerifyResponse | PortalSelectionRequired;
+export function needsPatientSelection(r: PortalVerifyResult): r is PortalSelectionRequired {
+  return (r as PortalSelectionRequired).requiresPatientSelection === true;
+}
 
 export interface PortalConsent { id?: string; type: string; version: string; acceptedAt?: string | null; }
 

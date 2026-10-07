@@ -5,10 +5,7 @@ import { Observable, catchError, map, tap, throwError } from 'rxjs';
 import { params } from '../core/api/http-utils';
 import { PortalAuthService } from './portal-auth.service';
 import { PORTAL_API_BASE, portalHeaders, portalLoginPath } from './portal-url';
-import {
-  PortalAppointment, PortalBookDto, PortalClinicInfo, PortalConsent, PortalInvoice, PortalMe, PortalMePatch, PortalSlot,
-  PortalSlotsResponse, PortalVerifyResponse, PortalWaitlistDto, PortalWaitlistEntry,
-} from './portal.models';
+import { PortalAppointment, PortalBookDto, PortalClinicInfo, PortalConsent, PortalInvoice, PortalMe, PortalMePatch, PortalSlot, PortalSlotsResponse, PortalVerifyResponse, PortalWaitlistDto, PortalWaitlistEntry, PortalVerifyResult, needsPatientSelection } from './portal.models';
 
 type Paged<T> = T[] | { items: T[]; total?: number };
 const unwrap = <T>(r: Paged<T> | null | undefined): T[] => (Array.isArray(r) ? r : r?.items ?? []);
@@ -28,9 +25,16 @@ export class PortalApi {
   requestOtp(clinicSlug: string, phone: string) {
     return this.http.post<{ sent: boolean }>(`${PORTAL_API_BASE}/auth/request-otp`, { clinicSlug, phone });
   }
+  /** Verifies the code. A shared phone returns a selection step instead of a session (see `selectPatient`). */
   verify(clinicSlug: string, phone: string, code: string) {
     return this.http
-      .post<PortalVerifyResponse>(`${PORTAL_API_BASE}/auth/verify`, { clinicSlug, phone, code })
+      .post<PortalVerifyResult>(`${PORTAL_API_BASE}/auth/verify`, { clinicSlug, phone, code })
+      .pipe(tap((r) => { if (!needsPatientSelection(r)) this.auth.apply(r); }));
+  }
+  /** Completes login for the chosen patient when several share the phone number. */
+  selectPatient(selectionToken: string, patientId: string) {
+    return this.http
+      .post<PortalVerifyResponse>(`${PORTAL_API_BASE}/auth/select`, { selectionToken, patientId })
       .pipe(tap((r) => this.auth.apply(r)));
   }
 

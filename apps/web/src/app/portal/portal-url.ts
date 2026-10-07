@@ -18,7 +18,7 @@ export function isPortalUrl(url: string): boolean {
 
 /** Portal endpoints that must never carry a token (OTP request/verify). */
 export function isPortalPublicUrl(url: string): boolean {
-  return /\/api\/v1\/portal\/auth\/(request-otp|verify)(\?|$)/.test(url);
+  return /\/api\/v1\/portal\/auth\/(request-otp|verify|select)(\?|$)/.test(url);
 }
 
 /** Header map for a portal request: bearer token (when known and the URL is not public) + extras. */

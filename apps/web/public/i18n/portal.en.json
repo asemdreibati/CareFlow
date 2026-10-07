@@ -81,7 +81,8 @@
       "changePhone": "Change number",
       "failed": "Could not verify the code. Check it and try again.",
       "sessionExpired": "Your session has expired. Please sign in again.",
-      "footer": "Powered by CareFlow"
+      "footer": "Powered by CareFlow",
+      "choosePatient": "Several patients use this phone number. Who is signing in?"
     },
     "consent": {
       "title": "Before you continue",
@@ -231,7 +232,13 @@
       "logout": "Log out of the portal"
     },
     "weekdays": {
-      "0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed", "4": "Thu", "5": "Fri", "6": "Sat"
+      "0": "Sun",
+      "1": "Mon",
+      "2": "Tue",
+      "3": "Wed",
+      "4": "Thu",
+      "5": "Fri",
+      "6": "Sat"
     }
   }
 }

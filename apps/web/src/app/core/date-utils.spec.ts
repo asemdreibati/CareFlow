@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { resetClinicTimeZone } from './i18n/locale-registry';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { renderSlots, timeOptions } from './date-utils';
+
+// These specs assume the runtime time zone: clear any clinic zone left by other specs.
+beforeEach(() => resetClinicTimeZone());
 
 describe('renderSlots', () => {
   const now = new Date('2026-10-04T10:00:00');

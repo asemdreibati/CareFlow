@@ -1,3 +1,4 @@
+import { resetClinicTimeZone } from './locale-registry';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
@@ -10,6 +11,9 @@ import { LanguageService } from './language.service';
 import { setPortalMode } from './locale-registry';
 import { PortalShell } from '../../portal/shell/portal-shell';
 import { PortalAuthService } from '../../portal/portal-auth.service';
+
+// The clinic-zone registry is shared module state: leave it clean for other specs.
+afterEach(() => resetClinicTimeZone());
 
 const session = (locale: 'ar' | 'en' | null): Session => ({
   user: { id: 'u1', email: 'a@b.c', firstName: 'A', lastName: 'B', locale },
