@@ -960,5 +960,12 @@
       "timeFormat": "{{day}}: times must be HH:mm.",
       "endAfterStart": "{{day}}: end time must be after start time."
     }
+  },
+  "invitations": {
+    "message": "{{clinic}} invited you to join as {{role}}.",
+    "accept": "Accept",
+    "decline": "Decline",
+    "accepted": "You joined {{clinic}}. Switch to it from the clinic menu.",
+    "declined": "Invitation from {{clinic}} declined."
   }
 }

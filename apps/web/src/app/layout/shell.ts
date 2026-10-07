@@ -7,6 +7,7 @@ import { LanguageService } from '../core/i18n/language.service';
 import { NotificationsBellComponent } from './notifications-bell';
 import { UserMenuComponent } from './user-menu';
 import { LanguageSwitcherComponent } from '../shared/language-switcher';
+import { InvitationsBannerComponent } from './invitations-banner';
 
 /** `label`/`group` are `nav.*` translation keys. */
 interface NavItem { label: string; path: string; icon: string; perms?: string[]; any?: boolean; group?: string; }
@@ -28,7 +29,7 @@ const NAV: NavItem[] = [
 
 @Component({
   selector: 'cf-shell',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, TranslatePipe, NotificationsBellComponent, UserMenuComponent, LanguageSwitcherComponent],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, TranslatePipe, NotificationsBellComponent, UserMenuComponent, LanguageSwitcherComponent, InvitationsBannerComponent],
   templateUrl: './shell.html',
   styleUrl: './shell.scss',
 })

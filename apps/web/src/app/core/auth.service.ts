@@ -121,6 +121,11 @@ export class AuthService {
   }
 
   /** Saves the UI language on the staff account (PATCH /auth/me); the local session is updated optimistically. */
+  /** Accept or decline a pending clinic invitation; the refreshed session is applied. */
+  respondToInvitation(id: string, decision: 'accept' | 'decline'): Observable<Session> {
+    return this.http.post<Session>(`/api/v1/auth/invitations/${id}/${decision}`, {}).pipe(tap((s) => this.setSession(s)));
+  }
+
   updateLocale(locale: 'ar' | 'en'): Observable<Session> {
     const s = this.session();
     if (s && s.user.locale !== locale) this.setSession({ ...s, user: { ...s.user, locale } });

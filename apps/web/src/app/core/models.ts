@@ -32,7 +32,10 @@ export interface Session {
   doctorId?: string | null;
   permissions: string[];
   clinics: ClinicSummary[];
+  /** Pending invitations from other clinics (accept to add the clinic to the switcher). */
+  invitations?: ClinicInvitation[];
 }
+export interface ClinicInvitation { id: string; clinic: { id: string; name: string }; role: Role; invitedAt: string; }
 export interface AuthResponse { tokens: Tokens; session: Session; }
 export interface LoginDto { email: string; password: string; clinicId?: string; }
 export interface RegisterDto {

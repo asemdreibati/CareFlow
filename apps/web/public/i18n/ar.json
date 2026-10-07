@@ -960,5 +960,12 @@
       "timeFormat": "{{day}}: يجب أن تكون الأوقات بصيغة HH:mm.",
       "endAfterStart": "{{day}}: يجب أن يكون وقت الانتهاء بعد وقت البدء."
     }
+  },
+  "invitations": {
+    "message": "دعتك {{clinic}} للانضمام بصفة {{role}}.",
+    "accept": "قبول",
+    "decline": "رفض",
+    "accepted": "انضممت إلى {{clinic}}. يمكنك التبديل إليها من قائمة العيادات.",
+    "declined": "تم رفض دعوة {{clinic}}."
   }
 }
