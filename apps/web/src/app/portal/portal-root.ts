@@ -1,4 +1,6 @@
-import { Component, ViewEncapsulation } from '@angular/core';
+import { Component, DestroyRef, ViewEncapsulation, inject } from '@angular/core';
+import { setPortalMode } from '../core/i18n/locale-registry';
+import { PortalAuthService } from './portal-auth.service';
 import { RouterOutlet } from '@angular/router';
 
 /**
@@ -89,4 +91,11 @@ import { RouterOutlet } from '@angular/router';
     @keyframes pt-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   `],
 })
-export class PortalRoot {}
+export class PortalRoot {
+  constructor() {
+    inject(PortalAuthService); // registers the portal clinic-timezone source
+    // While the portal is mounted, dates use the portal clinic's timezone and language switches never touch the staff account.
+    setPortalMode(true);
+    inject(DestroyRef).onDestroy(() => setPortalMode(false));
+  }
+}

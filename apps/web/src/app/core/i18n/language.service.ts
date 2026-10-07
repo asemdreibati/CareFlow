@@ -4,7 +4,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { TranslateService } from '@ngx-translate/core';
 import { AuthService } from '../auth.service';
 import { mapApiError, registerErrorTranslator } from './api-errors';
-import { INTL_TAGS, setActiveLocale } from './locale-registry';
+import { INTL_TAGS, clinicTimeZone, isPortalMode, setActiveLocale } from './locale-registry';
 
 export type { AppLocale } from './locale-registry';
 import type { AppLocale } from './locale-registry';
@@ -13,6 +13,7 @@ export const SUPPORTED_LOCALES: readonly AppLocale[] = ['ar', 'en'];
 export const DEFAULT_LOCALE: AppLocale = 'ar';
 const STORAGE_KEY = 'cf.locale';
 const EMPTY = '—';
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Enum groups searched (in order) by `enumLabel` when no group is given. */
 const ENUM_GROUPS = ['status', 'role', 'type', 'priority', 'channel', 'resourceType', 'severity', 'gender', 'paymentMethod', 'frequency', 'risk'];
@@ -62,28 +63,32 @@ export class LanguageService {
       }
     });
 
-    // Apply the preference stored on the staff account whenever a (new) session carries one.
+    // Apply the preference stored on the staff account whenever a (new) session carries one (not inside the patient portal).
     effect(() => {
       const user = this.auth.session()?.user;
       const key = user ? `${user.id}:${user.locale ?? ''}` : null;
       if (key === this.lastSessionKey) return;
       this.lastSessionKey = key;
       const pref = user?.locale;
-      if (pref && SUPPORTED_LOCALES.includes(pref)) untracked(() => this.locale.set(pref));
+      if (pref && SUPPORTED_LOCALES.includes(pref) && !untracked(() => isPortalMode())) untracked(() => this.locale.set(pref));
     });
   }
 
-  /** Switches the UI language immediately; when signed in the choice is saved on the account (best effort). */
+  /**
+   * Switches the UI language immediately. With a staff session the choice is saved on the staff
+   * account (PATCH /auth/me, best effort) unless `save: false` — the patient portal always passes
+   * `save: false` (and never saves while the portal tree is mounted) since it has its own `/portal/me`.
+   */
   set(locale: AppLocale, opts: { save?: boolean } = {}): void {
     if (!SUPPORTED_LOCALES.includes(locale) || locale === this.locale()) return;
     this.locale.set(locale);
-    if (opts.save !== false && this.auth.isAuthenticated()) {
+    if (opts.save !== false && !isPortalMode() && this.auth.isAuthenticated()) {
       this.auth.updateLocale(locale).subscribe({ error: () => undefined });
     }
   }
 
-  toggle(): void {
-    this.set(this.locale() === 'ar' ? 'en' : 'ar');
+  toggle(opts: { save?: boolean } = {}): void {
+    this.set(this.locale() === 'ar' ? 'en' : 'ar', opts);
   }
 
   /** Synchronous translation (for toasts, titles, aria labels). Reactive: re-evaluates in computed()/templates on language change. */
@@ -118,11 +123,23 @@ export class LanguageService {
     return mapApiError(err, (k, p) => this.t(k, p), fallback);
   }
 
-  // ---------- Formatting (Latin digits, 24h) ----------
+  // ---------- Formatting (Latin digits, 24h, clinic timezone) ----------
 
+  /**
+   * Instants are rendered in the clinic's timezone (`clinicTimeZone()`), not the browser's; pass
+   * `options.timeZone` to override. A date-only string ("2026-10-07", e.g. a birth date) is a calendar
+   * date, not an instant, and is shown as-is.
+   */
   formatDate(value: DateInput, options: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short', year: 'numeric' }): string {
     const d = this.toDate(value);
-    return d ? new Intl.DateTimeFormat(this.intlTag(), options).format(d) : EMPTY;
+    if (!d) return EMPTY;
+    const dateOnly = typeof value === 'string' && DATE_ONLY.test(value);
+    const timeZone = dateOnly ? 'UTC' : options.timeZone ?? clinicTimeZone() ?? undefined;
+    try {
+      return new Intl.DateTimeFormat(this.intlTag(), { ...options, timeZone }).format(d);
+    } catch {
+      return new Intl.DateTimeFormat(this.intlTag(), { ...options, timeZone: undefined }).format(d);
+    }
   }
 
   /** "06 Oct 2026, 14:05" */
@@ -205,15 +222,15 @@ export class LanguageService {
 
   /** Weekday names indexed like `Date.getDay()` (0 = Sunday). */
   weekdayNames(style: 'long' | 'short' | 'narrow' = 'long'): string[] {
-    const f = new Intl.DateTimeFormat(this.intlTag(), { weekday: style });
+    const f = new Intl.DateTimeFormat(this.intlTag(), { weekday: style, timeZone: 'UTC' });
     // 2023-01-01 is a Sunday.
-    return Array.from({ length: 7 }, (_, i) => f.format(new Date(2023, 0, 1 + i)));
+    return Array.from({ length: 7 }, (_, i) => f.format(new Date(Date.UTC(2023, 0, 1 + i, 12))));
   }
 
   /** Month names, January first. */
   monthNames(style: 'long' | 'short' = 'long'): string[] {
-    const f = new Intl.DateTimeFormat(this.intlTag(), { month: style });
-    return Array.from({ length: 12 }, (_, i) => f.format(new Date(2023, i, 1)));
+    const f = new Intl.DateTimeFormat(this.intlTag(), { month: style, timeZone: 'UTC' });
+    return Array.from({ length: 12 }, (_, i) => f.format(new Date(Date.UTC(2023, i, 1, 12))));
   }
 
   private toDate(value: DateInput): Date | null {

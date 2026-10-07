@@ -208,6 +208,21 @@
       "title": "Record access log",
       "hint": "Who opened this patient's data (append-only)",
       "empty": "No access recorded."
+    },
+    "portal": {
+      "title": "Patient portal",
+      "enable": "Portal access",
+      "enableHint": "Lets the patient sign in to the patient portal with a code sent to their phone.",
+      "language": "Preferred language",
+      "arabic": "Arabic",
+      "english": "English",
+      "enabled": "Portal enabled",
+      "disabled": "Portal disabled",
+      "enableShort": "Enable portal",
+      "disable": "Disable portal",
+      "enabledToast": "Portal access enabled",
+      "disabledToast": "Portal access disabled",
+      "saveFailed": "Patient created, but portal settings could not be saved."
     }
   },
   "doctors": {
@@ -282,6 +297,8 @@
     "endsAt": "Ends at",
     "updated": "Appointment updated",
     "updateFailed": "Could not update",
+    "invalidDateTime": "Enter a valid start and end date and time.",
+    "endBeforeStart": "The end must be after the start.",
     "statusChanged": "Appointment {{status}}",
     "noFurtherActions": "No further actions — this appointment is {{status}}.",
     "cancellation": "Cancellation",
@@ -847,7 +864,8 @@
     "channel": {
       "IN_APP": "In-app",
       "EMAIL": "Email",
-      "SMS": "SMS"
+      "SMS": "SMS",
+      "WHATSAPP": "WhatsApp"
     },
     "resourceType": {
       "ROOM": "Room",

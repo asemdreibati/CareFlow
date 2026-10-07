@@ -1,7 +1,7 @@
 import { Component, ElementRef, HostListener, computed, inject, input, output, signal } from '@angular/core';
 import { TranslatePipe } from '@ngx-translate/core';
 import { LanguageService } from '../core/i18n/language.service';
-import { Subject, debounceTime, distinctUntilChanged, switchMap } from 'rxjs';
+import { Subject, catchError, debounceTime, distinctUntilChanged, of, switchMap } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { PatientsApi } from '../core/api/patients.api';
 import { Patient, PatientRef } from '../core/models';
@@ -66,10 +66,14 @@ export class PatientSearchComponent {
       .pipe(
         debounceTime(250),
         distinctUntilChanged(),
-        switchMap((q) => { this.loading.set(true); return this.api.list({ search: q || undefined, pageSize: 8 }); }),
+        // Errors are caught per request so one failed search does not terminate the stream.
+        switchMap((q) => {
+          this.loading.set(true);
+          return this.api.list({ search: q || undefined, pageSize: 8 }).pipe(catchError(() => of(null)));
+        }),
         takeUntilDestroyed(),
       )
-      .subscribe({ next: (r) => { this.results.set(r.items); this.loading.set(false); }, error: () => this.loading.set(false) });
+      .subscribe((r) => { this.results.set(r?.items ?? []); this.loading.set(false); });
   }
 
   /** Allow a pre-selected patient (e.g. booking from a patient profile). */

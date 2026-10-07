@@ -85,6 +85,8 @@ export interface Patient {
   phone?: string | null; email?: string | null; address?: string | null; bloodType?: string | null;
   emergencyContact?: EmergencyContact | null; notes?: string | null; isActive: boolean; createdAt: string; updatedAt: string;
   nationalId?: string | null; nationalIdMasked?: string | null;
+  /** Patient may log in to the patient portal (phone OTP). */
+  portalEnabled?: boolean; locale?: 'ar' | 'en' | null;
   allergies?: Allergy[]; appointments?: Appointment[]; prescriptions?: Prescription[];
 }
 export type PatientRef = Pick<Patient, 'id' | 'mrn' | 'firstName' | 'lastName' | 'phone'>;
@@ -92,6 +94,10 @@ export interface PatientDto {
   firstName: string; lastName: string; dateOfBirth?: string; gender?: Gender; phone?: string; email?: string; address?: string;
   nationalId?: string; bloodType?: string; emergencyContact?: EmergencyContact; notes?: string; isActive?: boolean;
 }
+/** PATCH body: `null` clears an optional field; portal access + preferred language are edit-only on the API. */
+export type PatientUpdateDto = { [K in keyof PatientDto]?: PatientDto[K] | null } & { portalEnabled?: boolean; locale?: 'ar' | 'en' | null };
+/** `null` clears an optional field on PATCH. */
+export type NullablePatch<T> = { [K in keyof T]?: T[K] | null };
 export interface AccessLogRow { id: string; userId: string; encounterId?: string | null; action: string; createdAt: string; user?: SessionUser; }
 
 // ---------- Appointments ----------

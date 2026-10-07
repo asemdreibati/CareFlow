@@ -5,6 +5,7 @@ import { AuditApi } from '../../core/api/audit.api';
 import { MembersApi } from '../../core/api/members.api';
 import { LanguageService } from '../../core/i18n/language.service';
 import { AuditRow, Member } from '../../core/models';
+import { dateFilterRange } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { PaginationComponent } from '../../shared/pagination';
 
@@ -74,9 +75,11 @@ export class AuditPage {
   reset() { this.f = { action: '', entityType: '', entityId: '', actorUserId: '', from: '', to: '' }; this.apply(); }
   load() {
     this.loading.set(true);
+    // Both bounds are clinic-local days: from = start of the first day, to = end of the last day (API uses gte/lte).
+    const range = dateFilterRange(this.f.from, this.f.to);
     this.api.list({
       action: this.f.action || undefined, entityType: this.f.entityType || undefined, entityId: this.f.entityId || undefined, actorUserId: this.f.actorUserId || undefined,
-      from: this.f.from ? new Date(this.f.from).toISOString() : undefined, to: this.f.to ? new Date(this.f.to + 'T23:59:59').toISOString() : undefined,
+      from: range.from, to: range.to,
       page: this.page(), pageSize: this.pageSize,
     }).subscribe({
       next: (r) => { this.rows.set(r.items ?? []); this.total.set(r.total ?? 0); this.loading.set(false); this.error.set(null); },

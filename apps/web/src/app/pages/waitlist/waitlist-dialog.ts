@@ -10,6 +10,7 @@ import { normalizeWindows, validateWindows } from '../../core/scheduling/preferr
 import { DialogComponent } from '../../shared/dialog';
 import { PatientSearchComponent } from '../../shared/patient-search';
 import { PreferredWindowsEditorComponent } from '../../shared/preferred-windows-editor';
+import { fromLocalInput } from '../../core/date-utils';
 
 @Component({
   selector: 'cf-waitlist-dialog',
@@ -95,8 +96,8 @@ export class WaitlistDialogComponent {
       doctorId: this.mode() === 'doctor' ? this.doctorId() : undefined,
       specialty: this.mode() === 'specialty' ? this.specialty() : undefined,
       durationMinutes: Number(this.durationMinutes), priority: this.priority, type: this.type,
-      earliestAt: this.earliestAt ? new Date(this.earliestAt).toISOString() : undefined,
-      latestAt: this.latestAt ? new Date(this.latestAt).toISOString() : undefined,
+      earliestAt: fromLocalInput(this.earliestAt) ?? undefined,
+      latestAt: fromLocalInput(this.latestAt) ?? undefined,
       preferredWindows: this.windows().length ? normalizeWindows(this.windows()) : undefined,
       notes: this.notes.trim(),
     });

@@ -2,13 +2,13 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
-import { addDays, startOfDay } from 'date-fns';
 import { ResourcesApi } from '../../core/api/resources.api';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
 import { LanguageService } from '../../core/i18n/language.service';
 import { Resource, ResourceBooking } from '../../core/models';
 import { dayRange, isoDate, renderSlots, SlotView } from '../../core/date-utils';
+import { addDaysToKey } from '../../core/timezone';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { StatusChipComponent } from '../../shared/status-chip';
 import { HasPermissionDirective } from '../../core/permission.directive';
@@ -163,11 +163,11 @@ export class ResourcesPage {
   edit(r: Resource, e: Event) { e.stopPropagation(); this.editing.set(r); this.dialog.set(true); }
   onSaved() { this.dialog.set(false); this.load(); }
   select(r: Resource) { this.selected.set(r); this.loadBookings(); }
-  shiftDay(n: number) { this.day.set(isoDate(addDays(startOfDay(new Date(`${this.day()}T00:00:00`)), n))); this.loadBookings(); }
+  shiftDay(n: number) { this.day.set(addDaysToKey(this.day(), n)); this.loadBookings(); }
   loadBookings() {
     const r = this.selected(); if (!r) return;
     this.bookingsLoading.set(true); this.bookingsError.set(null);
-    const { from, to } = dayRange(new Date(`${this.day()}T00:00:00`));
+    const { from, to } = dayRange(this.day());
     this.api.bookings(r.id, { from, to }).subscribe({
       next: (b) => { this.bookings.set([...b].sort((x, y) => x.startsAt.localeCompare(y.startsAt))); this.bookingsLoading.set(false); },
       error: (err) => { this.bookingsLoading.set(false); this.bookings.set([]); this.bookingsError.set(this.lang.errorMessage(err, this.lang.t('resources.bookingsUnavailable'))); },

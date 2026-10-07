@@ -19,7 +19,7 @@ import { StatusChipComponent } from '../../../shared/status-chip';
         <div class="card-body">
           <dl class="kv">
             <dt>{{ 'patients.mrn' | translate }}</dt><dd class="mono">{{ p().mrn }}</dd>
-            <dt>{{ 'patients.dob' | translate }}</dt><dd>{{ lang.formatDate(p().dateOfBirth) }}</dd>
+            <dt>{{ 'patients.dob' | translate }}</dt><dd>{{ lang.formatDate(p().dateOfBirth?.slice(0, 10)) }}</dd>
             <dt>{{ 'patients.gender' | translate }}</dt><dd>{{ p().gender ? lang.enumLabel(p().gender, 'gender') : '—' }}</dd>
             <dt>{{ 'common.phone' | translate }}</dt><dd dir="ltr" class="text-start">{{ p().phone || '—' }}</dd>
             <dt>{{ 'common.email' | translate }}</dt><dd dir="ltr" class="text-start">{{ p().email || '—' }}</dd>
@@ -37,6 +37,14 @@ import { StatusChipComponent } from '../../../shared/status-chip';
             <dt>{{ 'patients.emergencyContact' | translate }}</dt>
             <dd>@if (p().emergencyContact; as ec) { {{ ec.name || '—' }} @if (ec.relation) { ({{ ec.relation }}) } @if (ec.phone) { · <span dir="ltr">{{ ec.phone }}</span> } } @else { — }</dd>
             <dt>{{ 'common.notes' | translate }}</dt><dd style="white-space: pre-line">{{ p().notes || '—' }}</dd>
+            <dt>{{ 'patients.portal.title' | translate }}</dt>
+            <dd class="row gap-1 wrap">
+              <span class="chip" [class.green]="p().portalEnabled" [class.gray]="!p().portalEnabled">{{ (p().portalEnabled ? 'patients.portal.enabled' : 'patients.portal.disabled') | translate }}</span>
+              @if (p().locale) { <span class="muted small">{{ (p().locale === 'ar' ? 'patients.portal.arabic' : 'patients.portal.english') | translate }}</span> }
+              @if (canWrite) {
+                <button type="button" class="btn xs" (click)="togglePortal()" [disabled]="portalSaving()">{{ (p().portalEnabled ? 'patients.portal.disable' : 'patients.portal.enableShort') | translate }}</button>
+              }
+            </dd>
           </dl>
         </div>
       </div>
@@ -85,10 +93,21 @@ export class PatientOverviewTab {
   readonly changed = output<void>();
   readonly revealed = signal(false);
   readonly saving = signal(false);
+  readonly portalSaving = signal(false);
   readonly canSensitive = this.auth.hasPermission('patients:sensitive');
   readonly canWrite = this.auth.hasPermission('patients:write');
   readonly severities: AllergySeverity[] = ['MILD', 'MODERATE', 'SEVERE', 'LIFE_THREATENING'];
   substance = ''; reaction = ''; severity: AllergySeverity | '' = '';
+
+  /** Quick portal-access switch (PATCH portalEnabled). */
+  togglePortal() {
+    const enable = !this.p().portalEnabled;
+    this.portalSaving.set(true);
+    this.api.update(this.p().id, { portalEnabled: enable }).subscribe({
+      next: () => { this.portalSaving.set(false); this.toast.success(this.lang.t(enable ? 'patients.portal.enabledToast' : 'patients.portal.disabledToast')); this.changed.emit(); },
+      error: (err) => { this.portalSaving.set(false); this.toast.fromError(err); },
+    });
+  }
 
   addAllergy() {
     if (!this.substance.trim()) return;

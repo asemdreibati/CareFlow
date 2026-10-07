@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { map } from 'rxjs';
 import { BASE, params } from './http-utils';
-import { AvailabilitySlot, Doctor, DoctorDto, Paginated, TimeOff } from '../models';
+import { AvailabilitySlot, Doctor, DoctorDto, NullablePatch, Paginated, TimeOff } from '../models';
 
 @Injectable({ providedIn: 'root' })
 export class DoctorsApi {
@@ -15,7 +15,7 @@ export class DoctorsApi {
   }
   get(id: string) { return this.http.get<Doctor>(`${BASE}/doctors/${id}`); }
   create(dto: DoctorDto) { return this.http.post<Doctor>(`${BASE}/doctors`, dto); }
-  update(id: string, dto: Partial<DoctorDto>) { return this.http.patch<Doctor>(`${BASE}/doctors/${id}`, dto); }
+  update(id: string, dto: NullablePatch<DoctorDto>) { return this.http.patch<Doctor>(`${BASE}/doctors/${id}`, dto); }
   deactivate(id: string) { return this.http.delete<void>(`${BASE}/doctors/${id}`); }
   setAvailability(id: string, slots: AvailabilitySlot[]) {
     return this.http.put<Doctor>(`${BASE}/doctors/${id}/availability`, { slots });

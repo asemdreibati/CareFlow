@@ -21,6 +21,7 @@
 }
 .ev:hover { filter: brightness(0.96); z-index: 4; }
 .ev.done { opacity: 0.6; }
+.ev.clipped { border-inline-start-style: dashed; }
 .ev-time { font-size: 10.5px; color: var(--cf-text-2); }
 .ev-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ev-sub { font-size: 10.5px; color: var(--cf-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

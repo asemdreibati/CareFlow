@@ -1,6 +1,5 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
-import { addDays, isSameDay, startOfDay } from 'date-fns';
 import { TranslatePipe } from '@ngx-translate/core';
 import { AppointmentsApi } from '../../core/api/appointments.api';
 import { DoctorsApi } from '../../core/api/doctors.api';
@@ -9,7 +8,8 @@ import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
 import { LanguageService } from '../../core/i18n/language.service';
 import { Appointment, Doctor, PatientRef } from '../../core/models';
-import { dayRange, weekRange } from '../../core/date-utils';
+import { dayRange, isoDate, weekRange } from '../../core/date-utils';
+import { DayKey, activeTimeZone, addDaysToKey, minutesOfDay, parseDayKey, startOfDayInZone, zonedTimeToUtc } from '../../core/timezone';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { HasPermissionDirective } from '../../core/permission.directive';
 import { BookingDialogComponent } from './booking-dialog';
@@ -19,16 +19,30 @@ export const CAL_START = 7;
 export const CAL_END = 21;
 export const HOUR_PX = 56;
 
-export interface CalEvent { a: Appointment; top: number; height: number; col: number; cols: number; color: string; }
+export const GRID_PX = (CAL_END - CAL_START) * HOUR_PX;
+const MIN_EVENT_PX = 20;
 
-/** Places appointments on a day column; overlapping events share the width. */
-export function layoutDay(appts: Appointment[]): CalEvent[] {
+/** `clipped`: the event starts before CAL_START or runs past CAL_END and is pinned to the grid edge. */
+export interface CalEvent { a: Appointment; top: number; height: number; col: number; cols: number; color: string; clipped: boolean; }
+
+/**
+ * Places one clinic-day's appointments on a column (positions from clinic-local wall-clock time in `tz`);
+ * overlapping events share the width. Events outside the 07:00–21:00 grid are pinned to its edge instead of
+ * being positioned off-canvas.
+ */
+export function layoutDay(appts: Appointment[], tz: string | undefined = activeTimeZone()): CalEvent[] {
   const sorted = [...appts].sort((x, y) => x.startsAt.localeCompare(y.startsAt));
   const evs: CalEvent[] = sorted.map((a) => {
     const s = new Date(a.startsAt); const e = new Date(a.endsAt);
-    const startMin = s.getHours() * 60 + s.getMinutes() - CAL_START * 60;
+    const startMin = minutesOfDay(s, tz) - CAL_START * 60;
     const dur = Math.max(15, (e.getTime() - s.getTime()) / 60000);
-    return { a, top: (startMin / 60) * HOUR_PX, height: Math.max(20, (dur / 60) * HOUR_PX - 2), col: 0, cols: 1, color: a.doctor?.color || '#64748b' };
+    let top = (startMin / 60) * HOUR_PX;
+    let height = Math.max(MIN_EVENT_PX, (dur / 60) * HOUR_PX - 2);
+    let clipped = false;
+    if (top < 0) { height = Math.max(MIN_EVENT_PX, top + height); top = 0; clipped = true; }
+    if (top > GRID_PX - MIN_EVENT_PX) { top = GRID_PX - MIN_EVENT_PX; height = MIN_EVENT_PX; clipped = true; }
+    if (top + height > GRID_PX) { height = Math.max(MIN_EVENT_PX, GRID_PX - top); clipped = true; }
+    return { a, top, height, col: 0, cols: 1, color: a.doctor?.color || '#64748b', clipped };
   });
   // Greedy column assignment for overlap clusters.
   let cluster: CalEvent[] = []; let clusterEnd = -1;
@@ -63,7 +77,8 @@ export class CalendarPage {
   readonly hourPx = HOUR_PX;
   readonly hours = Array.from({ length: CAL_END - CAL_START }, (_, i) => CAL_START + i);
   readonly view = signal<'week' | 'day'>('week');
-  readonly anchor = signal(startOfDay(new Date()));
+  /** Clinic-local date the view is anchored on. */
+  readonly anchor = signal<DayKey>(isoDate(new Date()));
   readonly doctors = signal<Doctor[]>([]);
   readonly doctorId = signal('');
   readonly appointments = signal<Appointment[]>([]);
@@ -73,20 +88,22 @@ export class CalendarPage {
   readonly finder = signal(false);
   readonly lockDoctor = !!this.auth.doctorId() && !this.auth.hasPermission('appointments:read_all');
 
-  readonly days = computed(() => {
+  /** Clinic-local dates (YYYY-MM-DD) shown as columns. */
+  readonly days = computed<DayKey[]>(() => {
     if (this.view() === 'day') return [this.anchor()];
-    const { start } = weekRange(this.anchor());
-    return Array.from({ length: 7 }, (_, i) => addDays(start, i));
+    const { startKey } = weekRange(this.anchor());
+    return Array.from({ length: 7 }, (_, i) => addDaysToKey(startKey, i));
   });
   readonly title = computed(() => {
-    const d = this.days();
+    const d = this.days().map((k) => this.at(k));
     return this.view() === 'day' ? this.lang.formatLongDate(d[0]) : `${this.lang.formatDayMonth(d[0])} – ${this.lang.formatDate(d[6])}`;
   });
   readonly byDay = computed(() => {
     const list = this.appointments().filter((a) => a.status !== 'CANCELLED');
-    return this.days().map((d) => layoutDay(list.filter((a) => isSameDay(new Date(a.startsAt), d))));
+    const tz = activeTimeZone();
+    return this.days().map((d) => layoutDay(list.filter((a) => isoDate(new Date(a.startsAt), tz) === d), tz));
   });
-  readonly nowTop = computed(() => { const n = new Date(); return ((n.getHours() * 60 + n.getMinutes() - CAL_START * 60) / 60) * HOUR_PX; });
+  readonly nowTop = computed(() => ((minutesOfDay(new Date(), activeTimeZone()) - CAL_START * 60) / 60) * HOUR_PX);
 
   constructor() {
     if (this.lockDoctor) this.doctorId.set(this.auth.doctorId()!);
@@ -102,14 +119,17 @@ export class CalendarPage {
     }
   }
 
-  isToday(d: Date) { return isSameDay(d, new Date()); }
-  dayLabel(d: Date) { return this.lang.formatDate(d, { weekday: 'short', day: '2-digit' }); }
-  hourLabel(h: number) { return this.lang.formatTime(new Date(2000, 0, 1, h, 0, 0)); }
+  /** Clinic-local midnight of a day key (for formatting). */
+  at(d: DayKey): Date { return startOfDayInZone(d); }
+  isToday(d: DayKey) { return d === isoDate(new Date()); }
+  dayLabel(d: DayKey) { return this.lang.formatDate(this.at(d), { weekday: 'short', day: '2-digit' }); }
+  /** Grid rows are clinic wall-clock hours. */
+  hourLabel(h: number) { return `${String(h).padStart(2, '0')}:00`; }
   timeLabel(a: Appointment) { return this.lang.formatTimeRange(a.startsAt, a.endsAt); }
 
   setView(v: 'week' | 'day') { this.view.set(v); this.load(); }
-  today() { this.anchor.set(startOfDay(new Date())); this.load(); }
-  shift(n: number) { this.anchor.update((d) => addDays(d, this.view() === 'day' ? n : n * 7)); this.load(); }
+  today() { this.anchor.set(isoDate(new Date())); this.load(); }
+  shift(n: number) { this.anchor.update((d) => addDaysToKey(d, this.view() === 'day' ? n : n * 7)); this.load(); }
   onDoctor(e: Event) { this.doctorId.set((e.target as HTMLSelectElement).value); this.load(); }
 
   load() {
@@ -123,12 +143,12 @@ export class CalendarPage {
   }
 
   /** Click on an empty area of a day column → booking dialog pre-filled with that time (rounded to 15 min). */
-  onColumnClick(day: Date, e: MouseEvent) {
+  onColumnClick(day: DayKey, e: MouseEvent) {
     if (!this.auth.hasPermission('appointments:write')) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const minutes = Math.floor(((e.clientY - rect.top) / HOUR_PX) * 60 / 15) * 15;
-    const d = new Date(day); d.setHours(CAL_START, minutes, 0, 0);
-    this.openDialog(d, null);
+    const { year, month, day: dd } = parseDayKey(day);
+    this.openDialog(zonedTimeToUtc(year, month, dd, CAL_START, minutes), null);
   }
   openEvent(a: Appointment, e: Event) { e.stopPropagation(); void this.router.navigate(['/appointments', a.id]); }
   openDialog(date: Date | null, patient: PatientRef | null) { this.dialog.set({ date, patient }); }

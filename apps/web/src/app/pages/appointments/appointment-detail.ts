@@ -13,7 +13,7 @@ import { LanguageService } from '../../core/i18n/language.service';
 import { rawServerMessage } from '../../core/i18n/api-errors';
 import { ConfirmService } from '../../shared/confirm.service';
 import { APPOINTMENT_TRANSITIONS, APPOINTMENT_TYPES, Appointment, AppointmentStatus, AppointmentType, Reminder } from '../../core/models';
-import { toLocalInput } from '../../core/date-utils';
+import { fromLocalInput, toLocalInput } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { StatusChipComponent } from '../../shared/status-chip';
 import { DialogComponent } from '../../shared/dialog';
@@ -260,7 +260,11 @@ export class AppointmentDetailPage {
   saveEdit() {
     const a = this.appt()!;
     const dto: Record<string, unknown> = {};
-    const s = new Date(this.edit.startsAt).toISOString(); const e = new Date(this.edit.endsAt).toISOString();
+    // datetime-local values are clinic wall-clock times; an emptied/partial field must not reach `toISOString()` (it throws).
+    const s = fromLocalInput(this.edit.startsAt); const e = fromLocalInput(this.edit.endsAt);
+    if (!s || !e) { this.editError.set(this.lang.t('appointments.invalidDateTime')); return; }
+    if (e <= s) { this.editError.set(this.lang.t('appointments.endBeforeStart')); return; }
+    this.editError.set(null);
     if (s !== a.startsAt) dto['startsAt'] = s;
     if (e !== a.endsAt) dto['endsAt'] = e;
     if (this.edit.type !== a.type) dto['type'] = this.edit.type;

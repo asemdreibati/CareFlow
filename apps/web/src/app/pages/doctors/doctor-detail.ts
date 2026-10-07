@@ -8,7 +8,7 @@ import { ToastService } from '../../core/toast.service';
 import { LanguageService } from '../../core/i18n/language.service';
 import { ConfirmService } from '../../shared/confirm.service';
 import { AvailabilitySlot, Doctor } from '../../core/models';
-import { timeOptions } from '../../core/date-utils';
+import { fromLocalInput, timeOptions } from '../../core/date-utils';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { StatusChipComponent } from '../../shared/status-chip';
 import { HasPermissionDirective } from '../../core/permission.directive';
@@ -75,10 +75,12 @@ export class DoctorDetailPage {
     });
   }
   addTimeOff() {
-    if (!this.timeOff.startsAt || !this.timeOff.endsAt) return;
+    // datetime-local values are clinic wall-clock times.
+    const startsAt = fromLocalInput(this.timeOff.startsAt); const endsAt = fromLocalInput(this.timeOff.endsAt);
+    if (!startsAt || !endsAt) return;
     this.addingTimeOff.set(true);
     this.api.addTimeOff(this.id(), {
-      startsAt: new Date(this.timeOff.startsAt).toISOString(), endsAt: new Date(this.timeOff.endsAt).toISOString(), reason: this.timeOff.reason || undefined,
+      startsAt, endsAt, reason: this.timeOff.reason || undefined,
     }).subscribe({
       next: () => { this.addingTimeOff.set(false); this.timeOff = { startsAt: '', endsAt: '', reason: '' }; this.toast.success(this.lang.t('doctors.timeOffAdded')); this.load(); },
       error: (err) => { this.addingTimeOff.set(false); this.toast.fromError(err); },

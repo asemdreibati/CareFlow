@@ -6,9 +6,23 @@ import { ToastService } from '../../core/toast.service';
 import { PortalApi } from '../portal-api.service';
 import { PortalAuthService } from '../portal-auth.service';
 import { useFormat } from '../portal-ui';
-import { KNOWN_CONSENTS, PortalConsent, hasConsent } from '../portal.models';
+import { KNOWN_CONSENTS, PortalConsent, PortalMePatch, hasConsent } from '../portal.models';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * PATCH /portal/me body: a filled field is sent trimmed; an empty one is omitted (the API rejects
+ * `email: ''`) unless the patient cleared a previously stored value, which is sent as `null`.
+ */
+export function profilePatch(locale: AppLocale, values: { email: string; address: string }, original: { email: string; address: string }): PortalMePatch {
+  const patch: PortalMePatch = { locale };
+  for (const k of ['email', 'address'] as const) {
+    const v = (values[k] ?? '').trim();
+    if (v) patch[k] = v;
+    else if (original[k]) patch[k] = null;
+  }
+  return patch;
+}
 
 @Component({
   selector: 'cf-portal-profile',
@@ -69,6 +83,8 @@ export class PortalProfilePage {
   readonly extraConsents = signal<PortalConsent[]>([]);
   email = '';
   address = '';
+  /** Values loaded from `/portal/me`, to tell "left empty" (omit) from "cleared" (send null). */
+  private original = { email: '', address: '' };
 
   readonly consentRows = computed(() => {
     const mine = [...(this.auth.profile()?.consents ?? []), ...this.extraConsents()];
@@ -78,7 +94,14 @@ export class PortalProfilePage {
   });
 
   constructor() {
-    this.api.me().subscribe({ next: (me) => { this.email = me?.email ?? ''; this.address = me?.address ?? ''; }, error: () => undefined });
+    this.api.me().subscribe({
+      next: (me) => {
+        this.email = me?.email ?? '';
+        this.address = me?.address ?? '';
+        this.original = { email: this.email.trim(), address: this.address.trim() };
+      },
+      error: () => undefined,
+    });
     this.api.consents().subscribe({ next: (list) => this.extraConsents.set(list), error: () => undefined });
   }
 
@@ -86,13 +109,13 @@ export class PortalProfilePage {
   emailValid() { return !this.email.trim() || EMAIL_RE.test(this.email.trim()); }
 
   setLocale(l: AppLocale) {
-    this.lang.set(l);
+    this.lang.set(l, { save: false });
     this.api.updateMe({ locale: l }).subscribe({ error: () => undefined });
   }
   save() {
     if (!this.emailValid()) return;
     this.saving.set(true);
-    this.api.updateMe({ locale: this.locale(), email: this.email.trim(), address: this.address.trim() }).subscribe({
+    this.api.updateMe(profilePatch(this.locale(), { email: this.email, address: this.address }, this.original)).subscribe({
       next: () => { this.saving.set(false); this.toast.success(this.f.lang.t('portal.profile.saved')); },
       error: (err: unknown) => { this.saving.set(false); this.toast.fromError(err, this.f.lang.t('portal.errors.generic')); },
     });

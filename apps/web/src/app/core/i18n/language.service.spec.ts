@@ -3,10 +3,13 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { TranslateService, provideTranslateService } from '@ngx-translate/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AuthService } from '../auth.service';
 import { Session } from '../models';
 import { LanguageService } from './language.service';
+import { setPortalMode } from './locale-registry';
+import { PortalShell } from '../../portal/shell/portal-shell';
+import { PortalAuthService } from '../../portal/portal-auth.service';
 
 const session = (locale: 'ar' | 'en' | null): Session => ({
   user: { id: 'u1', email: 'a@b.c', firstName: 'A', lastName: 'B', locale },
@@ -90,5 +93,53 @@ describe('LanguageService', () => {
     expect(lang.enumLabel(null)).toBe('—');
     expect(lang.errorMessage(new Error('boom'))).toBe('boom');
     expect(lang.errorMessage(null)).toBe('حدث خطأ ما');
+  });
+});
+
+describe('LanguageService in the patient portal (regression: portal toggles PATCHed the staff /auth/me)', () => {
+  let http: HttpTestingController;
+  let lang: LanguageService;
+
+  beforeEach(() => {
+    localStorage.clear();
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([]), provideTranslateService()] });
+    http = TestBed.inject(HttpTestingController);
+    TestBed.inject(AuthService).tokens.set({ accessToken: 'staff', refreshToken: 'r', expiresIn: '8h' });
+    lang = TestBed.inject(LanguageService);
+    TestBed.flushEffects();
+  });
+  afterEach(() => setPortalMode(false));
+
+  it('set/toggle with save: false never write the staff account locale', () => {
+    lang.set('en', { save: false });
+    lang.toggle({ save: false });
+    expect(lang.locale()).toBe('ar');
+    expect(http.match((r) => r.url === '/api/v1/auth/me' && r.method === 'PATCH').length).toBe(0);
+  });
+
+  it('never saves on the staff account while the portal tree is mounted', () => {
+    setPortalMode(true);
+    lang.toggle();
+    expect(http.match((r) => r.url === '/api/v1/auth/me').length).toBe(0);
+    setPortalMode(false);
+    lang.toggle();
+    expect(http.match((r) => r.url === '/api/v1/auth/me' && r.method === 'PATCH').length).toBe(1);
+  });
+
+  it('the portal header language button does not PATCH /auth/me', () => {
+    const fixture = TestBed.createComponent(PortalShell);
+    fixture.detectChanges();
+    (fixture.nativeElement.querySelector('button.pt-lang') as HTMLButtonElement).click();
+    expect(lang.locale()).toBe('en');
+    expect(http.match((r) => r.url === '/api/v1/auth/me').length).toBe(0);
+  });
+
+  it('portal sign-in applies the patient language without saving it on the staff account', () => {
+    TestBed.inject(PortalAuthService).apply({
+      accessToken: 'p', patient: { id: 'p1', firstName: 'N', lastName: 'A', locale: 'en' },
+      clinic: { name: 'Demo', slug: 'demo', timezone: 'Asia/Riyadh', currency: 'SAR' },
+    });
+    expect(lang.locale()).toBe('en');
+    expect(http.match((r) => r.url === '/api/v1/auth/me').length).toBe(0);
   });
 });

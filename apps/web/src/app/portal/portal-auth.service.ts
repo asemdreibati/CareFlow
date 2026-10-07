@@ -1,6 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { LanguageService } from '../core/i18n/language.service';
+import { setClinicTimeZoneSource } from '../core/i18n/locale-registry';
 import { PORTAL_TOKEN_KEY, portalLoginPath } from './portal-url';
 import { PortalClinic, PortalMe, PortalPatient, PortalVerifyResponse } from './portal.models';
 
@@ -40,6 +41,17 @@ export class PortalAuthService {
     return p ? `${p.firstName} ${p.lastName}`.trim() : '';
   });
   readonly currency = computed(() => this.clinic()?.currency || 'SAR');
+  /** Zone reported by `GET /portal/clinic` (used when the stored session predates it). */
+  private readonly clinicInfoZone = signal<string | null>(null);
+
+  constructor() {
+    // Portal dates/times render in the patient's clinic timezone (see locale-registry).
+    setClinicTimeZoneSource('portal', () => this.clinic()?.timezone || this.clinicInfoZone());
+  }
+
+  noteClinicTimeZone(tz: string | null | undefined): void {
+    this.clinicInfoZone.set(tz || null);
+  }
 
   rememberSlug(slug: string): void {
     const s = slug.trim().toLowerCase();
@@ -57,7 +69,8 @@ export class PortalAuthService {
     write(SESSION_KEY, JSON.stringify({ patient: res.patient, clinic: res.clinic }));
     if (res.clinic?.slug) this.rememberSlug(res.clinic.slug);
     this.profile.set(null);
-    if (res.patient?.locale === 'ar' || res.patient?.locale === 'en') this.lang.set(res.patient.locale);
+    // Patient preference only — never written to the staff account (`save: false`).
+    if (res.patient?.locale === 'ar' || res.patient?.locale === 'en') this.lang.set(res.patient.locale, { save: false });
   }
 
   setProfile(me: PortalMe | null): void {

@@ -22,3 +22,21 @@ export function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
   }
   return out as Partial<T>;
 }
+
+const isEmpty = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+
+/**
+ * For PATCH bodies: the optional `keys` the user cleared — empty now but set in `original` — mapped to
+ * `null` so the API clears them (`clean()` would silently omit them and the old value would stay).
+ * Fields that were already empty stay omitted. Merge over `clean(...)`: `{ ...clean(v), ...clearedToNull(v, orig, keys) }`.
+ */
+export function clearedToNull<K extends string>(
+  values: Partial<Record<K, unknown>>,
+  original: Partial<Record<K, unknown>> | null | undefined,
+  keys: readonly K[],
+): Partial<Record<K, null>> {
+  const out: Partial<Record<K, null>> = {};
+  if (!original) return out;
+  for (const k of keys) if (isEmpty(values[k]) && !isEmpty(original[k])) out[k] = null;
+  return out;
+}

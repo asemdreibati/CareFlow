@@ -4,7 +4,7 @@ import { ActivatedRoute } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
 import { ClinicApi } from '../../core/api/clinic.api';
 import { SchedulingApi } from '../../core/api/scheduling.api';
-import { clean } from '../../core/api/http-utils';
+import { clean, clearedToNull } from '../../core/api/http-utils';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
 import { LanguageService } from '../../core/i18n/language.service';
@@ -149,7 +149,8 @@ export class SettingsPage {
     if (this.clinicForm.invalid) return;
     this.savingClinic.set(true);
     const v = this.clinicForm.getRawValue();
-    this.api.update(clean({ ...v, currency: v.currency.toUpperCase() })).subscribe({
+    // Emptied optional contact fields are sent as null so the API clears them (timezone/currency are required columns).
+    this.api.update({ ...clean({ ...v, currency: v.currency.toUpperCase() }), ...clearedToNull(v, this.clinic(), ['phone', 'email', 'address'] as const) }).subscribe({
       next: (c) => { this.savingClinic.set(false); this.clinic.set(c); this.toast.success(this.lang.t('settings.clinicUpdated')); this.auth.me().subscribe({ error: () => undefined }); },
       error: (err) => { this.savingClinic.set(false); this.toast.fromError(err); },
     });

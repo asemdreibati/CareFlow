@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { map } from 'rxjs';
 import { BASE, params } from './http-utils';
-import { Paginated, Resource, ResourceAvailabilityResponse, ResourceBooking, ResourceDto } from '../models';
+import { NullablePatch, Paginated, Resource, ResourceAvailabilityResponse, ResourceBooking, ResourceDto } from '../models';
 
 @Injectable({ providedIn: 'root' })
 export class ResourcesApi {
@@ -15,7 +15,7 @@ export class ResourcesApi {
   }
   get(id: string) { return this.http.get<Resource>(`${BASE}/resources/${id}`); }
   create(dto: ResourceDto) { return this.http.post<Resource>(`${BASE}/resources`, dto); }
-  update(id: string, dto: Partial<ResourceDto>) { return this.http.patch<Resource>(`${BASE}/resources/${id}`, dto); }
+  update(id: string, dto: NullablePatch<ResourceDto>) { return this.http.patch<Resource>(`${BASE}/resources/${id}`, dto); }
   /** The API wraps the rows: `{ resource, from, to, bookings[] }`; a bare array or `{items}` is tolerated too. */
   bookings(id: string, q: { from: string; to: string }) {
     return this.http

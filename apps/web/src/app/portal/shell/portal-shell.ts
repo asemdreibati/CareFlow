@@ -19,7 +19,7 @@ import { PortalAuthService } from '../portal-auth.service';
           </div>
         </div>
         <div class="pt-row" style="gap:4px">
-          <button type="button" class="pt-lang" (click)="lang.toggle()" [attr.aria-label]="'portal.common.language' | translate">
+          <button type="button" class="pt-lang" (click)="lang.toggle({ save: false })" [attr.aria-label]="'portal.common.language' | translate">
             {{ lang.locale() === 'ar' ? ('portal.common.english' | translate) : ('portal.common.arabic' | translate) }}
           </button>
           <button type="button" class="pt-btn icon" (click)="auth.logout()" [attr.aria-label]="'portal.common.logout' | translate" [title]="'portal.common.logout' | translate">

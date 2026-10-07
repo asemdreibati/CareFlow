@@ -15,7 +15,7 @@ import { REQUIRED_CONSENT } from '../portal.models';
     <div class="pt-frame">
       <header class="pt-header">
         <div class="pt-brand"><span class="pt-logo">{{ (auth.clinic()?.name || 'C').charAt(0) }}</span><div class="name">{{ auth.clinic()?.name }}</div></div>
-        <button type="button" class="pt-lang" (click)="lang.toggle()">{{ lang.locale() === 'ar' ? ('portal.common.english' | translate) : ('portal.common.arabic' | translate) }}</button>
+        <button type="button" class="pt-lang" (click)="lang.toggle({ save: false })">{{ lang.locale() === 'ar' ? ('portal.common.english' | translate) : ('portal.common.arabic' | translate) }}</button>
       </header>
       <main class="pt-main pt-fade" style="padding-bottom:24px">
         <h1 class="pt-title">{{ 'portal.consent.title' | translate }}</h1>

@@ -7,6 +7,7 @@ import { LanguageService } from '../../core/i18n/language.service';
 import { Doctor, ProposalItem, RescheduleProposal, TimeOffImpact, TimeOffImpactDto } from '../../core/models';
 import { DialogComponent } from '../../shared/dialog';
 import { StatusChipComponent } from '../../shared/status-chip';
+import { fromLocalInput } from '../../core/date-utils';
 
 /** Two-step: impact preview (affected appointments) → create the persisted proposal. */
 @Component({
@@ -91,13 +92,14 @@ export class ProposalDialogComponent {
   readonly busy = signal(false);
   readonly error = signal<string | null>(null);
   reason = ''; searchDays = 14; allowOtherDoctors = true; createTimeOff = true;
-  readonly valid = computed(() => !!this.doctorId() && !!this.startsAt() && !!this.endsAt() && this.endsAt() > this.startsAt());
+  /** datetime-local values are clinic wall-clock times. */
+  readonly valid = computed(() => { const s = fromLocalInput(this.startsAt()); const e = fromLocalInput(this.endsAt()); return !!this.doctorId() && !!s && !!e && e > s; });
   readonly movable = computed(() => (this.impact()?.items ?? []).filter((i) => !!i.to).length);
 
   ngOnInit() { this.doctorId.set(this.initialDoctorId()); }
   private range(): TimeOffImpactDto {
     return {
-      doctorId: this.doctorId(), startsAt: new Date(this.startsAt()).toISOString(), endsAt: new Date(this.endsAt()).toISOString(),
+      doctorId: this.doctorId(), startsAt: fromLocalInput(this.startsAt())!, endsAt: fromLocalInput(this.endsAt())!,
       allowOtherDoctors: this.allowOtherDoctors, searchDays: Number(this.searchDays) || 14,
     };
   }

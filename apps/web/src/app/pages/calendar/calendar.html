@@ -28,18 +28,18 @@
   <div class="card cal" [class.day-view]="view() === 'day'">
     <div class="cal-head">
       <div class="gutter"></div>
-      @for (d of days(); track d.getTime()) { <div class="dh" [class.today]="isToday(d)">{{ dayLabel(d) }}</div> }
+      @for (d of days(); track d) { <div class="dh" [class.today]="isToday(d)">{{ dayLabel(d) }}</div> }
     </div>
     <div class="cal-body">
       <div class="gutter">
         @for (h of hours; track h) { <div class="hour" [style.height.px]="hourPx">{{ hourLabel(h) }}</div> }
       </div>
-      @for (d of days(); track d.getTime(); let i = $index) {
+      @for (d of days(); track d; let i = $index) {
         <div class="col-day" [class.today]="isToday(d)" (click)="onColumnClick(d, $event)" [style.height.px]="hours.length * hourPx">
           @for (h of hours; track h) { <div class="line" [style.top.px]="(h - hours[0]) * hourPx"></div> }
           @if (isToday(d) && nowTop() > 0) { <div class="now" [style.top.px]="nowTop()"></div> }
           @for (ev of byDay()[i]; track ev.a.id) {
-            <button type="button" class="ev" [class.done]="ev.a.status === 'COMPLETED' || ev.a.status === 'NO_SHOW'"
+            <button type="button" class="ev" [class.clipped]="ev.clipped" [class.done]="ev.a.status === 'COMPLETED' || ev.a.status === 'NO_SHOW'"
               [style.top.px]="ev.top" [style.height.px]="ev.height"
               [style.inset-inline-start]="'calc(' + (ev.col * 100 / ev.cols) + '% + 2px)'" [style.width]="'calc(' + (100 / ev.cols) + '% - 4px)'"
               [style.border-inline-start-color]="ev.color" [style.background]="ev.color + '1a'"

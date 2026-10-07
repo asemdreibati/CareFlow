@@ -8,6 +8,7 @@ import { Invoice, PatientRef, Service } from '../../core/models';
 import { num } from '../../core/money';
 import { DialogComponent } from '../../shared/dialog';
 import { PatientSearchComponent } from '../../shared/patient-search';
+import { startOfDayInZone } from '../../core/timezone';
 
 interface Line { serviceId: string; description: string; quantity: number; unitPrice: number; }
 
@@ -90,7 +91,7 @@ export class CreateInvoiceDialog {
       patientId: this.patient()!.id,
       items: this.lines().map((l) => ({ serviceId: l.serviceId || undefined, description: l.description.trim() || undefined, quantity: num(l.quantity), unitPrice: num(l.unitPrice) })),
       discount: num(this.discount) || undefined, tax: num(this.tax) || undefined,
-      dueAt: this.dueAt ? new Date(this.dueAt).toISOString() : undefined, notes: this.notes || undefined,
+      dueAt: this.dueAt ? startOfDayInZone(this.dueAt).toISOString() : undefined, notes: this.notes || undefined,
     }).subscribe({
       next: (inv) => { this.saving.set(false); this.toast.success(this.lang.t('billing.invoiceCreated', { number: inv.number })); this.created.emit(inv); },
       error: (err) => { this.saving.set(false); this.toast.fromError(err); },

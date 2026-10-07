@@ -4,18 +4,25 @@ import { Router, RouterLink } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
 import { newIdempotencyKey } from '../../core/api/booking-headers';
 import { ToastService } from '../../core/toast.service';
+import { DayKey, activeTimeZone, addDaysToKey, dayBounds, dayKey as zonedDayKey, startOfDayInZone } from '../../core/timezone';
 import { PortalApi } from '../portal-api.service';
+import { PortalAuthService } from '../portal-auth.service';
 import { useFormat } from '../portal-ui';
 import { PortalClinicInfo, PortalDoctor, PortalSlot } from '../portal.models';
 
 const DAYS_AHEAD = 14;
 
-/** Start of the next N local days (today first). */
-export function nextDays(count = DAYS_AHEAD, from: Date = new Date()): Date[] {
-  const start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-  return Array.from({ length: count }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+/** The next N clinic-local dates ("YYYY-MM-DD", today first) in the clinic's timezone. */
+export function nextDays(count = DAYS_AHEAD, from: Date = new Date(), tz: string | undefined = activeTimeZone()): DayKey[] {
+  const start = zonedDayKey(from, tz);
+  return Array.from({ length: count }, (_, i) => addDaysToKey(start, i));
 }
-export const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+/** Slot query window for a clinic-local day: [max(day start, now), next clinic midnight), or null when the day is over. */
+export function slotWindow(day: DayKey, now: Date = new Date(), tz: string | undefined = activeTimeZone()): { from: Date; to: Date } | null {
+  const b = dayBounds(day, tz);
+  const from = new Date(Math.max(b.from.getTime(), now.getTime()));
+  return b.to.getTime() > from.getTime() ? { from, to: b.to } : null;
+}
 
 /**
  * Book flow: doctor or specialty → day (next 14) → slot grid (`GET /portal/slots`) → reason → confirm
@@ -50,11 +57,11 @@ export const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1
 
       <div class="pt-section">{{ 'portal.book.day' | translate }}</div>
       <div class="pt-scroll">
-        @for (d of days; track dayKey(d); let i = $index) {
-          <button type="button" class="pt-day" [class.active]="dayKey(d) === dayKey(day())" (click)="day.set(d)">
-            <div class="w">{{ i === 0 ? ('portal.common.today' | translate) : f.lang.formatDate(d, { weekday: 'short' }) }}</div>
-            <div class="n">{{ f.day(d) }}</div>
-            <div class="w">{{ f.month(d) }}</div>
+        @for (d of days(); track d; let i = $index) {
+          <button type="button" class="pt-day" [class.active]="d === day()" (click)="day.set(d)">
+            <div class="w">{{ i === 0 ? ('portal.common.today' | translate) : f.lang.formatDate(at(d), { weekday: 'short' }) }}</div>
+            <div class="n">{{ f.day(at(d)) }}</div>
+            <div class="w">{{ f.month(at(d)) }}</div>
           </button>
         }
       </div>
@@ -96,15 +103,16 @@ export class PortalBookPage {
   private readonly api = inject(PortalApi);
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
+  private readonly portalAuth = inject(PortalAuthService);
 
-  readonly days = nextDays();
-  readonly dayKey = dayKey;
+  /** Clinic-local dates; recomputed if the clinic timezone becomes known after load. */
+  readonly days = computed(() => nextDays(DAYS_AHEAD, new Date(), activeTimeZone()));
   readonly clinic = signal<PortalClinicInfo | null>(null);
   readonly clinicError = signal<string | null>(null);
   readonly mode = signal<'doctor' | 'specialty'>('doctor');
   readonly doctorId = signal('');
   readonly specialty = signal('');
-  readonly day = signal<Date>(this.days[0]);
+  readonly day = signal<DayKey>(this.days()[0]);
   readonly slots = signal<PortalSlot[]>([]);
   readonly slotsLoading = signal(false);
   readonly selected = signal<PortalSlot | null>(null);
@@ -130,22 +138,27 @@ export class PortalBookPage {
   loadClinic() {
     this.clinicError.set(null);
     this.api.clinic().subscribe({
-      next: (c) => this.clinic.set({ ...c, doctors: c?.doctors ?? [] }),
+      next: (c) => {
+        if (c?.timezone) this.portalAuth.noteClinicTimeZone(c.timezone);
+        this.clinic.set({ ...c, doctors: c?.doctors ?? [] });
+        if (!this.days().includes(this.day())) this.day.set(this.days()[0]);
+      },
       error: (err: unknown) => this.clinicError.set((err as { status?: number })?.status === 0 ? this.f.lang.t('portal.errors.network') : this.f.lang.t('portal.errors.notAvailable')),
     });
   }
   setMode(m: 'doctor' | 'specialty') { this.mode.set(m); this.selected.set(null); }
+  /** Clinic-local midnight of a day key, for formatting its weekday/day/month. */
+  at(d: DayKey): Date { return startOfDayInZone(d); }
   isSelected(s: PortalSlot) { const sel = this.selected(); return !!sel && sel.startsAt === s.startsAt && sel.doctor.id === s.doctor.id; }
 
-  loadSlots(target: { doctorId?: string; specialty?: string }, day: Date) {
+  loadSlots(target: { doctorId?: string; specialty?: string }, day: DayKey) {
     this.selected.set(null);
     if (!target.doctorId && !target.specialty) { this.slots.set([]); return; }
     const req = ++this.slotsRequest;
-    const from = new Date(Math.max(day.getTime(), Date.now()));
-    const to = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
-    if (to.getTime() <= from.getTime()) { this.slots.set([]); return; }
+    const win = slotWindow(day);
+    if (!win) { this.slots.set([]); return; }
     this.slotsLoading.set(true);
-    this.api.slots({ ...target, from: from.toISOString(), to: to.toISOString() }).subscribe({
+    this.api.slots({ ...target, from: win.from.toISOString(), to: win.to.toISOString() }).subscribe({
       next: (list) => {
         if (req !== this.slotsRequest) return;
         this.slots.set([...list].filter((s) => new Date(s.startsAt).getTime() >= Date.now()).sort((a, b) => a.startsAt.localeCompare(b.startsAt)));

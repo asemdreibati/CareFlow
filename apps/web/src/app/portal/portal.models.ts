@@ -17,7 +17,8 @@ export interface PortalMe {
   id: string; firstName: string; lastName: string; phone?: string | null; email?: string | null; address?: string | null;
   locale?: PortalLocale | null; dateOfBirth?: string | null; consents?: PortalConsent[];
 }
-export interface PortalMePatch { locale?: PortalLocale; email?: string; address?: string; }
+/** `null` clears a stored value. */
+export interface PortalMePatch { locale?: PortalLocale; email?: string | null; address?: string | null; }
 
 export interface PortalDoctor { id: string; firstName: string; lastName: string; title?: string | null; specialty: string; }
 export interface PortalClinicInfo {

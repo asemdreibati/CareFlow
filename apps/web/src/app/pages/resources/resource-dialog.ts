@@ -2,7 +2,7 @@ import { Component, inject, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { TranslatePipe } from '@ngx-translate/core';
 import { ResourcesApi } from '../../core/api/resources.api';
-import { clean } from '../../core/api/http-utils';
+import { clean, clearedToNull } from '../../core/api/http-utils';
 import { ToastService } from '../../core/toast.service';
 import { LanguageService } from '../../core/i18n/language.service';
 import { RESOURCE_TYPES, Resource, ResourceType } from '../../core/models';
@@ -60,7 +60,10 @@ export class ResourceDialogComponent {
     this.saving.set(true); this.error.set(null);
     const r = this.resource();
     const dto = clean({ name: this.name.trim(), type: this.type, color: this.color, notes: this.notes.trim(), isActive: r ? this.isActive : undefined });
-    const req = r ? this.api.update(r.id, dto) : this.api.create(dto as { name: string; type: ResourceType; color?: string; notes?: string });
+    // Edit: emptied notes are sent as null so the API clears them (create keeps omitting them).
+    const req = r
+      ? this.api.update(r.id, { ...dto, ...clearedToNull({ notes: this.notes }, r, ['notes'] as const) })
+      : this.api.create(dto as { name: string; type: ResourceType; color?: string; notes?: string });
     req.subscribe({
       next: (res) => { this.saving.set(false); this.toast.success(this.lang.t(r ? 'resources.updated' : 'resources.created')); this.saved.emit(res); },
       error: (err) => { this.saving.set(false); this.error.set(this.lang.errorMessage(err)); },

@@ -19,7 +19,7 @@ import { PortalAuthService } from '../portal-auth.service';
     <div class="pt-frame login">
       <header class="pt-header">
         <div class="pt-brand"><span class="pt-logo">{{ initial() }}</span><div class="name">{{ clinicName() }}</div></div>
-        <button type="button" class="pt-lang" (click)="lang.toggle()">{{ lang.locale() === 'ar' ? ('portal.common.english' | translate) : ('portal.common.arabic' | translate) }}</button>
+        <button type="button" class="pt-lang" (click)="lang.toggle({ save: false })">{{ lang.locale() === 'ar' ? ('portal.common.english' | translate) : ('portal.common.arabic' | translate) }}</button>
       </header>
       <main class="pt-main">
         @if (step() === 'phone') {

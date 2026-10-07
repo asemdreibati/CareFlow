@@ -7,6 +7,7 @@ import { ToastService } from '../../core/toast.service';
 import { LanguageService } from '../../core/i18n/language.service';
 import { Doctor, PatientRef, PreferredWindow, SlotCandidate } from '../../core/models';
 import { isoDate } from '../../core/date-utils';
+import { dayBounds, startOfDayInZone } from '../../core/timezone';
 import { normalizeWindows, windowsProblem } from '../../core/scheduling/preferred-windows';
 import { PreferredWindowsEditorComponent } from '../../shared/preferred-windows-editor';
 import { ResourceSelectComponent } from '../../shared/resource-select';
@@ -138,9 +139,10 @@ export class FindSlotPanelComponent {
     this.loading.set(true);
     this.error.set(null);
     this.searched.set(true);
-    const fromD = this.from() ? new Date(`${this.from()}T00:00:00`) : new Date();
+    // Date inputs are clinic-local days.
+    const fromD = this.from() ? startOfDayInZone(this.from()) : new Date();
     const from = fromD.getTime() < Date.now() ? new Date() : fromD;
-    const to = this.to() ? addDays(new Date(`${this.to()}T00:00:00`), 1) : undefined;
+    const to = this.to() ? dayBounds(this.to()).to : undefined;
     this.api.search({
       durationMinutes: this.duration(),
       doctorId: this.mode() === 'doctor' ? this.doctorId() || undefined : undefined,

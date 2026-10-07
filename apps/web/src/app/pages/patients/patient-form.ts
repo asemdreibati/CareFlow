@@ -3,15 +3,16 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
 import { PatientsApi } from '../../core/api/patients.api';
-import { clean } from '../../core/api/http-utils';
+import { clean, clearedToNull } from '../../core/api/http-utils';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
 import { LanguageService } from '../../core/i18n/language.service';
-import { Gender, Patient, PatientDto } from '../../core/models';
+import { Gender, Patient, PatientDto, PatientUpdateDto } from '../../core/models';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { FieldErrorComponent } from '../../shared/field-error';
 
 const BLOOD_TYPES = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+type PatientFormValue = ReturnType<PatientFormPage['form']['getRawValue']>;
 
 @Component({
   selector: 'cf-patient-form',
@@ -50,6 +51,22 @@ const BLOOD_TYPES = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
               <div class="field"><label>{{ 'common.name' | translate }}</label><input class="input" formControlName="name" /></div>
               <div class="field"><label>{{ 'common.phone' | translate }}</label><input class="input" formControlName="phone" dir="ltr" /></div>
               <div class="field"><label>{{ 'patients.relation' | translate }}</label><input class="input" formControlName="relation" [placeholder]="'patients.relationPlaceholder' | translate" /></div>
+            </div>
+          </div>
+          <div class="card mb-2">
+            <div class="card-header"><h3>{{ 'patients.portal.title' | translate }}</h3></div>
+            <div class="card-body form-grid">
+              <div class="field">
+                <label class="checkbox"><input type="checkbox" formControlName="portalEnabled" /> {{ 'patients.portal.enable' | translate }}</label>
+                <div class="subtle small">{{ 'patients.portal.enableHint' | translate }}</div>
+              </div>
+              <div class="field"><label>{{ 'patients.portal.language' | translate }}</label>
+                <select class="input" formControlName="locale">
+                  <option value="">—</option>
+                  <option value="ar">{{ 'patients.portal.arabic' | translate }}</option>
+                  <option value="en">{{ 'patients.portal.english' | translate }}</option>
+                </select>
+              </div>
             </div>
           </div>
           <div class="card mb-2">
@@ -95,6 +112,8 @@ export class PatientFormPage {
     emergencyContact: this.fb.nonNullable.group({ name: [''], phone: [''], relation: [''] }),
     notes: [''],
     isActive: [true],
+    portalEnabled: [false],
+    locale: ['' as '' | 'ar' | 'en'],
   });
 
   ngOnInit() {
@@ -108,7 +127,7 @@ export class PatientFormPage {
           firstName: p.firstName, lastName: p.lastName, dateOfBirth: p.dateOfBirth?.slice(0, 10) ?? '', gender: p.gender ?? '',
           phone: p.phone ?? '', email: p.email ?? '', address: p.address ?? '', nationalId: '', bloodType: p.bloodType ?? '',
           emergencyContact: { name: p.emergencyContact?.name ?? '', phone: p.emergencyContact?.phone ?? '', relation: p.emergencyContact?.relation ?? '' },
-          notes: p.notes ?? '', isActive: p.isActive,
+          notes: p.notes ?? '', isActive: p.isActive, portalEnabled: !!p.portalEnabled, locale: p.locale === 'ar' || p.locale === 'en' ? p.locale : '',
         });
         this.loading.set(false);
       },
@@ -127,10 +146,45 @@ export class PatientFormPage {
     }) as PatientDto;
     this.saving.set(true);
     const id = this.id();
-    const req = id ? this.api.update(id, { ...dto, isActive: v.isActive }) : this.api.create(dto);
-    req.subscribe({
-      next: (p) => { this.toast.success(this.lang.t(id ? 'patients.updated' : 'patients.created')); void this.router.navigate(['/patients', p.id]); },
+    const portal = { portalEnabled: v.portalEnabled, ...(v.locale ? { locale: v.locale } : {}) };
+    if (id) {
+      this.api.update(id, { ...dto, ...this.cleared(v), ...portal, isActive: v.isActive }).subscribe({
+        next: (p) => this.done(p, 'patients.updated'),
+        error: (err) => { this.saving.set(false); this.toast.fromError(err); },
+      });
+      return;
+    }
+    // CreatePatientDto has no portal fields (the API rejects unknown keys): apply them with a follow-up PATCH.
+    const needsPortalPatch = v.portalEnabled || !!v.locale;
+    this.api.create(dto).subscribe({
+      next: (created) => {
+        if (!needsPortalPatch) { this.done(created, 'patients.created'); return; }
+        this.api.update(created.id, portal).subscribe({
+          next: (p) => this.done(p, 'patients.created'),
+          error: (err) => { this.toast.fromError(err, this.lang.t('patients.portal.saveFailed')); this.done(created, 'patients.created'); },
+        });
+      },
       error: (err) => { this.saving.set(false); this.toast.fromError(err); },
     });
+  }
+
+  /**
+   * Edit only: optional fields the user emptied are sent as `null` so the API clears them. Gender is not
+   * nullable (falls back to UNKNOWN); an emptied emergency contact (a JSON column) is sent as `{}`.
+   */
+  private cleared(v: PatientFormValue): PatientUpdateDto {
+    const p = this.patient();
+    if (!p) return {};
+    const out: PatientUpdateDto = clearedToNull(v, p, ['dateOfBirth', 'phone', 'email', 'address', 'bloodType', 'notes', 'locale'] as const);
+    if (!v.gender && p.gender && p.gender !== 'UNKNOWN') out.gender = 'UNKNOWN';
+    const ecNow = Object.keys(clean(v.emergencyContact)).length;
+    const ecBefore = Object.values(p.emergencyContact ?? {}).some((x) => typeof x === 'string' && x.trim());
+    if (!ecNow && ecBefore) out.emergencyContact = {};
+    return out;
+  }
+
+  private done(p: Patient, key: string) {
+    this.toast.success(this.lang.t(key));
+    void this.router.navigate(['/patients', p.id]);
   }
 }

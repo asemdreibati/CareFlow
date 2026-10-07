@@ -3,7 +3,6 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TranslatePipe } from '@ngx-translate/core';
-import { format } from 'date-fns';
 import { AppointmentsApi } from '../../core/api/appointments.api';
 import { SeriesApi } from '../../core/api/series.api';
 import { isResourceConflict, newIdempotencyKey } from '../../core/api/booking-headers';
@@ -15,6 +14,17 @@ import {
   SeriesResolvePolicy,
 } from '../../core/models';
 import { SlotView, isoDate, renderSlots } from '../../core/date-utils';
+import { activeTimeZone, dayKey, isValidTimeZone, zonedHHmm, zonedParts } from '../../core/timezone';
+
+/**
+ * Recurrence anchor of a series in the clinic's timezone — the API expands `startsOn`/`startTime`/
+ * `byWeekday`/`byMonthDay` in clinic time, so they must not be derived from the browser's zone.
+ */
+export function seriesAnchor(startsAt: string | Date, tz: string | undefined): { startsOn: string; startTime: string; weekday: number; monthDay: number } {
+  const start = new Date(startsAt);
+  const p = zonedParts(start, tz);
+  return { startsOn: dayKey(start, tz), startTime: zonedHHmm(start, tz), weekday: p.weekday, monthDay: p.day };
+}
 import { DialogComponent } from '../../shared/dialog';
 import { PatientSearchComponent } from '../../shared/patient-search';
 import { ResourceSelectComponent } from '../../shared/resource-select';
@@ -266,14 +276,15 @@ export class BookingDialogComponent {
   }
 
   private createSeries() {
-    const start = new Date(this.selected()!);
+    const clinicTz = this.auth.clinic()?.timezone;
+    const anchor = seriesAnchor(this.selected()!, isValidTimeZone(clinicTz) ? clinicTz : activeTimeZone());
     const dto: CreateSeriesDto = {
       doctorId: this.doctorId(), patientId: this.patient()!.id, frequency: this.frequency(), interval: Number(this.interval) || 1,
-      startsOn: this.date(), startTime: format(start, 'HH:mm'), durationMinutes: this.duration(), type: this.type,
+      startsOn: anchor.startsOn, startTime: anchor.startTime, durationMinutes: this.duration(), type: this.type,
       reason: this.reason || undefined, resolve: this.resolve,
     };
-    if (this.frequency() === 'WEEKLY') dto.byWeekday = this.byWeekday().length ? this.byWeekday() : [start.getDay()];
-    if (this.frequency() === 'MONTHLY') dto.byMonthDay = this.byMonthDay ?? start.getDate();
+    if (this.frequency() === 'WEEKLY') dto.byWeekday = this.byWeekday().length ? this.byWeekday() : [anchor.weekday];
+    if (this.frequency() === 'MONTHLY') dto.byMonthDay = this.byMonthDay ?? anchor.monthDay;
     if (this.endMode() === 'count') dto.count = Number(this.count); else dto.until = this.until;
     this.seriesApi.create(dto).subscribe({
       next: (r) => {

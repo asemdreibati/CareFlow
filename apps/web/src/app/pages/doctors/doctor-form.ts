@@ -4,10 +4,10 @@ import { Router, RouterLink } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
 import { DoctorsApi } from '../../core/api/doctors.api';
 import { MembersApi } from '../../core/api/members.api';
-import { clean } from '../../core/api/http-utils';
+import { clean, clearedToNull } from '../../core/api/http-utils';
 import { ToastService } from '../../core/toast.service';
 import { LanguageService } from '../../core/i18n/language.service';
-import { DoctorDto, Member } from '../../core/models';
+import { Doctor, DoctorDto, Member } from '../../core/models';
 import { PageHeaderComponent } from '../../shared/page-header';
 import { FieldErrorComponent } from '../../shared/field-error';
 
@@ -70,6 +70,7 @@ export class DoctorFormPage {
   readonly loading = signal(false);
   readonly saving = signal(false);
   readonly members = signal<Member[]>([]);
+  private original: Doctor | null = null;
   readonly form = this.fb.nonNullable.group({
     title: ['Dr.'], firstName: ['', Validators.required], lastName: ['', Validators.required], specialty: ['', Validators.required],
     licenseNumber: [''], phone: [''], email: ['', Validators.email], color: [PALETTE[0]], bio: [''], userId: [''], isActive: [true],
@@ -82,6 +83,7 @@ export class DoctorFormPage {
     this.loading.set(true);
     this.api.get(id).subscribe({
       next: (d) => {
+        this.original = d;
         this.form.patchValue({
           title: d.title ?? '', firstName: d.firstName, lastName: d.lastName, specialty: d.specialty, licenseNumber: d.licenseNumber ?? '',
           phone: d.phone ?? '', email: d.email ?? '', color: d.color ?? PALETTE[0], bio: d.bio ?? '', userId: d.userId ?? '', isActive: d.isActive,
@@ -97,7 +99,9 @@ export class DoctorFormPage {
     const dto = clean({ ...v, isActive: undefined }) as DoctorDto;
     this.saving.set(true);
     const id = this.id();
-    (id ? this.api.update(id, { ...dto, isActive: v.isActive }) : this.api.create(dto)).subscribe({
+    // Edit: emptied optional fields are sent as null so the API clears them (create keeps omitting them).
+    const cleared = id ? clearedToNull(v, this.original, ['title', 'licenseNumber', 'phone', 'email', 'bio', 'userId'] as const) : {};
+    (id ? this.api.update(id, { ...dto, ...cleared, isActive: v.isActive }) : this.api.create(dto)).subscribe({
       next: (d) => { this.toast.success(this.lang.t(id ? 'doctors.updated' : 'doctors.created')); void this.router.navigate(['/doctors', d.id]); },
       error: (err) => { this.saving.set(false); this.toast.fromError(err); },
     });

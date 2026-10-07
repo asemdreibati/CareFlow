@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { BASE, params } from './http-utils';
-import { AccessLogRow, Allergy, AllergySeverity, Paginated, Patient, PatientDto } from '../models';
+import { AccessLogRow, Allergy, AllergySeverity, Paginated, Patient, PatientDto, PatientUpdateDto } from '../models';
 
 @Injectable({ providedIn: 'root' })
 export class PatientsApi {
@@ -11,7 +11,7 @@ export class PatientsApi {
   }
   get(id: string) { return this.http.get<Patient>(`${BASE}/patients/${id}`); }
   create(dto: PatientDto) { return this.http.post<Patient>(`${BASE}/patients`, dto); }
-  update(id: string, dto: Partial<PatientDto>) { return this.http.patch<Patient>(`${BASE}/patients/${id}`, dto); }
+  update(id: string, dto: PatientUpdateDto) { return this.http.patch<Patient>(`${BASE}/patients/${id}`, dto); }
   deactivate(id: string) { return this.http.delete<void>(`${BASE}/patients/${id}`); }
   addAllergy(id: string, dto: { substance: string; reaction?: string; severity?: AllergySeverity }) {
     return this.http.post<Allergy>(`${BASE}/patients/${id}/allergies`, dto);

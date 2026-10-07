@@ -68,7 +68,7 @@ export class PatientDetailPage {
     const years = ageYears(p.dateOfBirth);
     const age = years === null ? '—' : this.lang.t('patients.years', { n: years });
     const gender = p.gender ? this.lang.enumLabel(p.gender, 'gender') : this.lang.enumLabel('UNKNOWN', 'gender');
-    return `${p.mrn} · ${age} · ${gender} · ${this.lang.t('patients.dobShort')} ${this.lang.formatDate(p.dateOfBirth)}`;
+    return `${p.mrn} · ${age} · ${gender} · ${this.lang.t('patients.dobShort')} ${this.lang.formatDate(p.dateOfBirth?.slice(0, 10))}`;
   });
   readonly tabs = computed(() => {
     const t: { key: Tab; label: string }[] = [{ key: 'overview', label: 'patients.tabs.overview' }];
