@@ -60,6 +60,15 @@ export function phoneVariants(e164: string, defaultCountryCode = '966'): string[
   return [...variants];
 }
 
+/**
+ * Digits-only forms of `phoneVariants` (no `+`, spaces, dashes, dots or
+ * parentheses), to compare against `regexp_replace(phone, '[^0-9]', '', 'g')`
+ * so stored spellings such as `+966 50 123 4567` or `(050) 123-4567` match.
+ */
+export function phoneDigitVariants(e164: string, defaultCountryCode = '966'): string[] {
+  return [...new Set(phoneVariants(e164, defaultCountryCode).map((v) => v.replace(/\D/g, '')).filter((v) => v.length > 0))];
+}
+
 /** `whatsapp:+966…` → WHATSAPP, otherwise SMS. */
 export function channelOfAddress(from: string): 'SMS' | 'WHATSAPP' {
   return /^whatsapp:/i.test(from.trim()) ? 'WHATSAPP' : 'SMS';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { channelOfAddress, foldDigits, normalizePhone, phoneVariants } from './phone.js';
+import { channelOfAddress, foldDigits, normalizePhone, phoneDigitVariants, phoneVariants } from './phone.js';
 
 describe('normalizePhone', () => {
   it('keeps E.164 numbers', () => {
@@ -48,5 +48,18 @@ describe('channelOfAddress', () => {
   it('detects WhatsApp senders', () => {
     expect(channelOfAddress('whatsapp:+966501234567')).toBe('WHATSAPP');
     expect(channelOfAddress('+966501234567')).toBe('SMS');
+  });
+});
+
+describe('phoneDigitVariants', () => {
+  it('lists digits-only spellings (compared with the digits of the stored phone)', () => {
+    expect(phoneDigitVariants('+966501234567').sort()).toEqual(['00966501234567', '0501234567', '501234567', '966501234567'].sort());
+  });
+  it('matches stored phones written with spaces, dashes, dots or parentheses', () => {
+    const variants = phoneDigitVariants('+966501234567');
+    for (const stored of ['+966 50 123 4567', '050-123-4567', '(050) 123 4567', '0096650.123.4567', '+966-50-1234567']) {
+      expect(variants).toContain(stored.replace(/[^0-9]/g, ''));
+    }
+    expect(variants).not.toContain('+966501234567'.replace(/[^0-9]/g, '') + '1');
   });
 });

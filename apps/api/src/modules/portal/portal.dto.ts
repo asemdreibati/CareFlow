@@ -15,10 +15,18 @@ export class VerifyOtpDto extends RequestOtpDto {
   @IsString() @Matches(/^[0-9٠-٩]{6}$/, { message: 'code must be 6 digits' }) code: string;
 }
 
+/** Second login step when several patients share the phone (see the verify response). */
+export class SelectPatientDto {
+  @IsString() @Length(10, 4000) selectionToken: string;
+  @IsUUID() patientId: string;
+}
+
 export class UpdatePortalProfileDto {
   @IsOptional() @IsIn(['ar', 'en']) locale?: 'ar' | 'en';
-  @IsOptional() @IsEmail() @MaxLength(200) email?: string;
-  @IsOptional() @IsString() @MaxLength(500) address?: string;
+  /** null clears the stored value. */
+  @IsOptional() @IsEmail() @MaxLength(200) email?: string | null;
+  /** null clears the stored value. */
+  @IsOptional() @IsString() @MaxLength(500) address?: string | null;
 }
 
 export class PortalAppointmentsQuery extends PaginationQuery {

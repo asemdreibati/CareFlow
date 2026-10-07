@@ -6,9 +6,9 @@ import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { tenantContext } from '../../common/tenancy/tenant-context.js';
 import { MESSAGING_CONFIG, type MessagingConfig } from './messaging.config.js';
 import type { ListMessagesQuery, SendMessageDto } from './messaging.dto.js';
-import { renderTemplate, resolveLocale, type Locale, type TemplateKey, type TemplateParams } from './messaging.templates.js';
+import { maskSecretsInBody, renderTemplate, resolveLocale, splitSecretParams, type Locale, type TemplateKey, type TemplateParams } from './messaging.templates.js';
 import { normalizePhone } from './phone.js';
-import { EMAIL_PROVIDER, SMS_PROVIDER, WHATSAPP_PROVIDER, type EmailProvider, type ProviderResult, type SmsProvider, type WhatsAppProvider } from './providers/provider.js';
+import { EMAIL_PROVIDER, SMS_PROVIDER, WHATSAPP_PROVIDER, type EmailProvider, type ProviderResult, type SendOptions, type SmsProvider, type WhatsAppProvider } from './providers/provider.js';
 
 export interface SendInput {
   clinicId: string;
@@ -33,6 +33,13 @@ export interface SendRawInput {
   subject?: string;
   /** Template key recorded on the row when the body came from a template. */
   template?: string | null;
+  /**
+   * Body to persist (and log) instead of `body` when the message carries
+   * secrets; `body` itself only goes to the provider.
+   */
+  redactedBody?: string;
+  /** Secret values contained in `body` (handed to the provider as metadata, never stored). */
+  secrets?: Readonly<Record<string, string>>;
 }
 
 export interface InboundInput {
@@ -50,6 +57,24 @@ export interface InboundInput {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_BODY = 4000;
+
+/** `messages` row for an inbound patient reply. */
+export function inboundMessageData(input: InboundInput): Prisma.MessageUncheckedCreateInput {
+  return {
+    clinicId: input.clinicId,
+    patientId: input.patientId,
+    appointmentId: input.appointmentId,
+    channel: input.channel,
+    direction: 'INBOUND',
+    address: input.address,
+    body: input.body.slice(0, MAX_BODY),
+    status: 'RECEIVED',
+    provider: input.provider,
+    providerMessageId: input.providerMessageId,
+    inReplyToId: input.inReplyToId,
+    intent: input.intent,
+  };
+}
 
 /**
  * Runs `fn` with RLS scoped to `clinicId` even when called outside a request
@@ -79,10 +104,20 @@ export class MessagingService {
     @Inject(EMAIL_PROVIDER) private readonly email: EmailProvider,
   ) {}
 
-  /** Renders a bilingual template and sends it (see `sendRaw`). */
+  /**
+   * Renders a bilingual template and sends it (see `sendRaw`). Secret
+   * parameters (the OTP code) reach the provider only: the stored row and any
+   * log output carry the masked rendering.
+   */
   send(input: SendInput): Promise<Message> {
-    const rendered = renderTemplate(input.template, resolveLocale(input.locale), input.params ?? {});
+    const locale = resolveLocale(input.locale);
+    const params = input.params ?? {};
+    const rendered = renderTemplate(input.template, locale, params);
+    const { redacted, secrets } = splitSecretParams(input.template, params);
+    const hasSecrets = Object.keys(secrets).length > 0;
     return this.sendRaw({
+      redactedBody: hasSecrets ? renderTemplate(input.template, locale, redacted).body : undefined,
+      secrets: hasSecrets ? secrets : undefined,
       clinicId: input.clinicId,
       patientId: input.patientId,
       appointmentId: input.appointmentId,
@@ -98,6 +133,7 @@ export class MessagingService {
   async sendRaw(input: SendRawInput): Promise<Message> {
     const address = this.normalizeAddress(input.channel, input.to);
     const body = input.body.slice(0, MAX_BODY);
+    const storedBody = (input.redactedBody ?? input.body).slice(0, MAX_BODY);
     const base: Prisma.MessageUncheckedCreateInput = {
       clinicId: input.clinicId,
       patientId: input.patientId ?? null,
@@ -105,7 +141,7 @@ export class MessagingService {
       channel: input.channel,
       direction: 'OUTBOUND',
       address: address ?? input.to.trim().slice(0, 200),
-      body,
+      body: storedBody,
       template: input.template ?? null,
       status: 'QUEUED',
     };
@@ -120,7 +156,7 @@ export class MessagingService {
     let result: ProviderResult | undefined;
     let error: string | undefined;
     try {
-      result = await this.dispatch(input.channel, address, input.subject ?? '', body);
+      result = await this.dispatch(input.channel, address, input.subject ?? '', body, { template: input.template ?? null, redactedBody: input.redactedBody, secrets: input.secrets });
     } catch (err) {
       error = (err instanceof Error ? err.message : String(err)).slice(0, 1000);
       this.logger.warn(`${input.channel} to ${address} failed: ${error}`);
@@ -137,24 +173,7 @@ export class MessagingService {
 
   /** Persists an inbound message (patient reply) in the clinic it belongs to. */
   recordInbound(input: InboundInput): Promise<Message> {
-    return withClinic(input.clinicId, () =>
-      this.prisma.db.message.create({
-        data: {
-          clinicId: input.clinicId,
-          patientId: input.patientId,
-          appointmentId: input.appointmentId,
-          channel: input.channel,
-          direction: 'INBOUND',
-          address: input.address,
-          body: input.body.slice(0, MAX_BODY),
-          status: 'RECEIVED',
-          provider: input.provider,
-          providerMessageId: input.providerMessageId,
-          inReplyToId: input.inReplyToId,
-          intent: input.intent,
-        },
-      }),
-    );
+    return withClinic(input.clinicId, () => this.prisma.db.message.create({ data: inboundMessageData(input) }));
   }
 
   /** Latest outbound message to `address` of the given template that is linked to an appointment (any clinic; system context). */
@@ -198,7 +217,12 @@ export class MessagingService {
       this.prisma.db.message.findMany({ where, skip: q.skip, take: q.pageSize, orderBy: { createdAt: 'desc' } }),
       this.prisma.db.message.count({ where }),
     ]);
-    return paginate(items, total, q);
+    // Defence in depth: OTP rows stored before codes were masked never leave the API in clear.
+    return paginate(
+      items.map((m) => ({ ...m, body: maskSecretsInBody(m.template, m.body) })),
+      total,
+      q,
+    );
   }
 
   /** Staff sends a free-text message to a patient's phone or email. */
@@ -232,14 +256,14 @@ export class MessagingService {
     return normalizePhone(to, this.config.defaultCountryCode);
   }
 
-  private dispatch(channel: MessageChannel, address: string, subject: string, body: string): Promise<ProviderResult> {
+  private dispatch(channel: MessageChannel, address: string, subject: string, body: string, options: SendOptions): Promise<ProviderResult> {
     switch (channel) {
       case 'SMS':
-        return this.sms.sendSms(address, body);
+        return this.sms.sendSms(address, body, options);
       case 'WHATSAPP':
-        return this.whatsapp.sendWhatsApp(address, body);
+        return this.whatsapp.sendWhatsApp(address, body, options);
       case 'EMAIL':
-        return this.email.sendEmail(address, subject, body);
+        return this.email.sendEmail(address, subject, body, options);
       default:
         return Promise.reject(new Error(`Unsupported channel ${String(channel)}`));
     }

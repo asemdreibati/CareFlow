@@ -28,6 +28,7 @@ const REDACTED_KEYS = new Set([
   // one-time codes (patient portal login)
   'code',
   'otp',
+  'selectionToken',
 ]);
 
 /** Deep-copies a value with sensitive keys replaced, so secrets never land in the audit table. */

@@ -4,7 +4,7 @@ import type { MessageStatus } from '@prisma/client';
 import type { Request } from 'express';
 import { Audit, Public } from '../../common/auth/decorators.js';
 import { InboundService } from './inbound.service.js';
-import { MESSAGING_CONFIG, type MessagingConfig } from './messaging.config.js';
+import { insecureWebhooksAllowed, MESSAGING_CONFIG, type MessagingConfig } from './messaging.config.js';
 import type { TwilioInboundBody, TwilioStatusBody } from './messaging.dto.js';
 import { MessagingService } from './messaging.service.js';
 import { verifyTwilioSignature } from './providers/twilio.provider.js';
@@ -38,7 +38,9 @@ export function twiml(message?: string): string {
 /**
  * Twilio webhooks (public). Requests are authenticated with Twilio's request
  * signature (HMAC-SHA1 over the public URL + sorted form params, keyed with
- * `TWILIO_AUTH_TOKEN`). Without a token (development) only loopback callers are
+ * `TWILIO_AUTH_TOKEN`). Without a token every webhook is rejected (403), unless
+ * the developer explicitly opts in with `TWILIO_WEBHOOK_INSECURE=1` (never
+ * honoured when `NODE_ENV=production`): then unsigned loopback callers are
  * accepted so a local tunnel/curl can still exercise the flow.
  */
 @ApiExcludeController()
@@ -65,7 +67,8 @@ export class TwilioWebhookController {
     const sid = typeof body.MessageSid === 'string' ? body.MessageSid : typeof body.SmsMessageSid === 'string' ? body.SmsMessageSid : null;
     if (!from) return twiml();
     const result = await this.inbound.handle({ from, body: text, providerMessageId: sid });
-    return twiml(result.reply);
+    // Duplicates (Twilio retries) get an empty TwiML: the patient is not messaged twice.
+    return twiml(result.reply || undefined);
   }
 
   /** Delivery status callback. */
@@ -86,7 +89,10 @@ export class TwilioWebhookController {
   private assertSignature(req: Request, body: Record<string, unknown>) {
     const token = this.config.twilio.authToken;
     if (!token) {
-      if (LOOPBACK.has(req.ip ?? '') || LOOPBACK.has(req.socket?.remoteAddress ?? '')) return;
+      // Both the boot-time flag and the live environment must agree (NODE_ENV=production always wins).
+      const insecure = this.config.twilio.insecureWebhooks && insecureWebhooksAllowed();
+      const loopback = LOOPBACK.has(req.socket?.remoteAddress ?? '') && (req.ip === undefined || LOOPBACK.has(req.ip));
+      if (insecure && loopback) return;
       throw new ForbiddenException('Twilio webhooks are disabled until TWILIO_AUTH_TOKEN is configured');
     }
     const url = `${this.config.publicApiUrl}${req.originalUrl}`;

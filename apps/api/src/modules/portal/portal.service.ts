@@ -7,18 +7,19 @@ import { tenantContext } from '../../common/tenancy/tenant-context.js';
 import { addMinutes, defaultDurationMinutes, INACTIVE_STATUSES } from '../appointments/scheduling.js';
 import { SlotSearchService } from '../appointments/slot-search.service.js';
 import { toInvoiceView } from '../billing/billing.service.js';
+import { patientMayCancel } from '../messaging/inbound-decision.js';
 import { MessagingService } from '../messaging/messaging.service.js';
 import { formatWhen, resolveLocale, type Locale, type TemplateKey } from '../messaging/messaging.templates.js';
 import { ACTIVE_STATUS_FILTER, appointmentInclude, AppointmentWriterService, type AppointmentRow } from '../waitlist/appointment-writer.service.js';
 import { WaitlistService } from '../waitlist/waitlist.service.js';
 import type { PortalPatient } from './portal-auth.guard.js';
+import { bookingLimits, isOnSlotGrid, portalMessage } from './portal-booking.js';
 import type { PortalAppointmentsQuery, PortalBookDto, PortalCancelDto, PortalConsentDto, PortalSlotsQuery, PortalWaitlistDto, UpdatePortalProfileDto } from './portal.dto.js';
 
 const DAY_MS = 86_400_000;
 const MAX_SLOT_DAYS = 14;
 const DEFAULT_SLOT_LIMIT = 50;
 const DEFAULT_DURATION = 30;
-const CANCEL_LEAD_MS = 2 * 3_600_000;
 const MAX_ACTIVE_WAITLIST = 3;
 export const PORTAL_BOOKING_NOTE = 'Booked via patient portal';
 
@@ -88,7 +89,12 @@ export class PortalService {
   async updateMe(p: PortalPatient, dto: UpdatePortalProfileDto) {
     await this.prisma.db.patient.update({
       where: { id: p.id },
-      data: { locale: dto.locale, email: dto.email === undefined ? undefined : dto.email.trim().toLowerCase(), address: dto.address },
+      // null clears a value (the web portal sends null when a field is emptied); undefined leaves it unchanged.
+      data: {
+        locale: dto.locale ?? undefined,
+        email: dto.email === undefined ? undefined : dto.email === null ? null : dto.email.trim().toLowerCase() || null,
+        address: dto.address === undefined ? undefined : dto.address === null ? null : dto.address.trim() || null,
+      },
     });
     return this.me(p);
   }
@@ -138,6 +144,9 @@ export class PortalService {
     if (to <= from) throw new BadRequestException('to must be after from');
     if (to.getTime() - from.getTime() > MAX_SLOT_DAYS * DAY_MS) throw new BadRequestException(`Slot search cannot exceed ${MAX_SLOT_DAYS} days`);
     const start = new Date(Math.max(from.getTime(), Date.now()));
+    // Nothing beyond the booking horizon is offered (it could not be booked).
+    const horizonEnd = Date.now() + bookingLimits(p.clinic.settings).horizonDays * DAY_MS;
+    if (to.getTime() > horizonEnd) to.setTime(horizonEnd);
     if (to <= start) return { query: { from: from.toISOString(), to: to.toISOString(), timezone: p.clinic.timezone }, candidates: [] };
 
     let durationMinutes = q.durationMinutes;
@@ -158,75 +167,127 @@ export class PortalService {
     });
   }
 
-  /** Books a CONSULTATION of the doctor's default length. Idempotent per `Idempotency-Key`. */
+  /**
+   * Books a CONSULTATION of the doctor's default length. Idempotent per
+   * `Idempotency-Key`. Limits (localised errors): the start must lie on the
+   * doctor's slot grid (400) within the clinic's booking horizon (400, default
+   * 90 days) and the patient may hold at most N future SCHEDULED/CONFIRMED
+   * appointments (409, default 3) — see `bookingLimits`.
+   */
   async book(p: PortalPatient, dto: PortalBookDto, idempotencyKeyHeader?: string) {
     const idempotencyKey = (idempotencyKeyHeader ?? '').trim() || undefined;
     if (idempotencyKey && idempotencyKey.length > 200) throw new BadRequestException('Idempotency-Key must be at most 200 characters');
     if (idempotencyKey) {
-      const existing = await this.prisma.db.appointment.findFirst({ where: { clinicId: p.clinicId, idempotencyKey }, include: { doctor: { select: doctorPublic } } });
-      if (existing) {
-        if (existing.patientId !== p.id) throw new ConflictException('Idempotency-Key is already used');
-        return { appointment: toPortalAppointment(existing), replayed: true };
-      }
+      const replay = await this.replayByKey(p, idempotencyKey);
+      if (replay) return replay;
     }
     const startsAt = new Date(dto.startsAt);
     if (Number.isNaN(startsAt.getTime())) throw new BadRequestException('startsAt is not a valid date');
     if (startsAt.getTime() <= Date.now()) throw new BadRequestException('startsAt must be in the future');
+    const locale = this.localeOf(p);
+    const limits = bookingLimits(p.clinic.settings);
+    if (startsAt.getTime() > Date.now() + limits.horizonDays * DAY_MS) throw new BadRequestException(portalMessage('beyondHorizon', locale, { days: limits.horizonDays }));
 
     const [doctor, patient] = await Promise.all([this.writer.loadDoctor(p.clinicId, dto.doctorId), this.writer.loadPatient(p.clinicId, p.id)]);
     const timeZone = p.clinic.timezone || 'UTC';
+    if (!isOnSlotGrid(doctor.availability, startsAt, timeZone)) throw new BadRequestException(portalMessage('offGrid', locale));
     const range = { startsAt, endsAt: addMinutes(startsAt, defaultDurationMinutes(doctor.availability, startsAt, timeZone)) };
 
-    const created = await this.writer.withOverlapGuard(() =>
-      this.prisma.transaction(async (tx) => {
-        await this.writer.assertBookable(tx, doctor, p.clinicId, range, timeZone);
-        const clash = await tx.appointment.findFirst({
-          where: { clinicId: p.clinicId, patientId: patient.id, status: ACTIVE_STATUS_FILTER, startsAt: { lt: range.endsAt }, endsAt: { gt: range.startsAt } },
-          select: { id: true },
-        });
-        if (clash) throw new ConflictException('You already have an appointment at this time');
-        const row = await this.writer.insert(tx, {
-          clinicId: p.clinicId,
-          doctorId: doctor.id,
-          patientId: patient.id,
-          ...range,
-          type: 'CONSULTATION',
-          reason: dto.reason?.trim() || null,
-          notes: PORTAL_BOOKING_NOTE,
-          createdById: null,
-        });
-        if (!idempotencyKey) return row;
-        await tx.appointment.update({ where: { id: row.id }, data: { idempotencyKey } });
-        return { ...row, idempotencyKey };
-      }),
-    );
+    let outcome: AppointmentRow | { replayOf: string };
+    try {
+      outcome = await this.writer.withOverlapGuard(() =>
+        this.prisma.transaction(async (tx): Promise<AppointmentRow | { replayOf: string }> => {
+          // Same Idempotency-Key in flight: wait for it and replay its row instead of racing into a 409.
+          if (idempotencyKey) {
+            const prior = await this.writer.lockIdempotencyKey(tx, p.clinicId, idempotencyKey);
+            if (prior) return { replayOf: prior };
+          }
+          // Serialise this patient's bookings so the cap below cannot be raced past.
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`portal-book|${patient.id}`}, 0))`;
+          const active = await tx.appointment.count({
+            where: { clinicId: p.clinicId, patientId: patient.id, status: { in: ['SCHEDULED', 'CONFIRMED'] }, startsAt: { gt: new Date() } },
+          });
+          if (active >= limits.maxActiveBookings) throw new ConflictException(portalMessage('tooManyBookings', locale, { max: limits.maxActiveBookings }));
+          await this.writer.assertBookable(tx, doctor, p.clinicId, range, timeZone);
+          const clash = await tx.appointment.findFirst({
+            where: { clinicId: p.clinicId, patientId: patient.id, status: ACTIVE_STATUS_FILTER, startsAt: { lt: range.endsAt }, endsAt: { gt: range.startsAt } },
+            select: { id: true },
+          });
+          if (clash) throw new ConflictException('You already have an appointment at this time');
+          const row = await this.writer.insert(tx, {
+            clinicId: p.clinicId,
+            doctorId: doctor.id,
+            patientId: patient.id,
+            ...range,
+            type: 'CONSULTATION',
+            reason: dto.reason?.trim() || null,
+            notes: PORTAL_BOOKING_NOTE,
+            createdById: null,
+          });
+          if (!idempotencyKey) return row;
+          await tx.appointment.update({ where: { id: row.id }, data: { idempotencyKey } });
+          return { ...row, idempotencyKey };
+        }),
+      );
+    } catch (err) {
+      // A concurrent request with the same key won (e.g. the overlap constraint fired first): replay it.
+      if (idempotencyKey && err instanceof ConflictException) {
+        const replay = await this.replayByKey(p, idempotencyKey);
+        if (replay) return replay;
+      }
+      throw err;
+    }
+    if ('replayOf' in outcome) {
+      const replay = await this.replayByKey(p, idempotencyKey as string);
+      if (replay) return replay;
+      throw new ConflictException('Idempotency-Key is already used');
+    }
+    const created = outcome;
     this.writer.emitCreated(created, p.id);
     await this.notifyPatient(p, created, 'appointment.confirmed');
     return { appointment: toPortalAppointment({ ...created, doctor: this.publicDoctor(created) }), replayed: false };
   }
 
+  /** A held waitlist offer (`holdExpiresAt` set) is accepted through the waitlist first, then confirmed. */
   async confirm(p: PortalPatient, id: string) {
-    const existing = await this.loadOwn(p, id);
+    let existing = await this.loadOwn(p, id);
+    if (existing.holdExpiresAt && (existing.status === 'SCHEDULED' || existing.status === 'CONFIRMED')) {
+      const entry = await this.heldOfferEntry(p, existing.id);
+      if (!entry) throw new ConflictException(portalMessage('offerUnavailable', this.localeOf(p)));
+      await this.waitlist.accept(this.actor(p), entry.id);
+      existing = await this.loadOwn(p, id);
+    }
     if (existing.status === 'CONFIRMED') return this.appointment(p, id);
     if (existing.status !== 'SCHEDULED') throw new ConflictException(`A ${existing.status.toLowerCase().replace('_', ' ')} appointment cannot be confirmed`);
     if (existing.startsAt.getTime() <= Date.now()) throw new ConflictException('This appointment has already started');
-    const updated = await this.prisma.transaction((tx) =>
-      tx.appointment.update({ where: { id: existing.id }, data: { status: 'CONFIRMED', version: { increment: 1 } }, include: appointmentInclude }),
-    );
+    const updated = await this.prisma.transaction(async (tx) => {
+      const row = await tx.appointment.update({ where: { id: existing.id }, data: { status: 'CONFIRMED', version: { increment: 1 } }, include: appointmentInclude });
+      // A confirmed hold is settled right away (the waitlist listener would do it asynchronously).
+      return (await this.writer.settleHold(tx, row.id)) ? tx.appointment.findUniqueOrThrow({ where: { id: row.id }, include: appointmentInclude }) : row;
+    });
     this.writer.emitUpdated(updated, p.id);
     return toPortalAppointment({ ...updated, doctor: this.publicDoctor(updated) });
   }
 
-  /** Patients may cancel up to 2 hours before the start; later cancellations go through the clinic (409). */
+  /**
+   * Patients may cancel up to 2 hours before the start; later cancellations go
+   * through the clinic (409). Cancelling a held waitlist offer declines it
+   * through the waitlist (the entry waits again).
+   */
   async cancel(p: PortalPatient, id: string, dto: PortalCancelDto) {
     const existing = await this.loadOwn(p, id);
     if (existing.status === 'CANCELLED') return this.appointment(p, id);
     if ((INACTIVE_STATUSES as readonly string[]).includes(existing.status) || existing.status === 'COMPLETED' || existing.status === 'CHECKED_IN' || existing.status === 'IN_PROGRESS') {
       throw new ConflictException(`A ${existing.status.toLowerCase().replace('_', ' ')} appointment cannot be cancelled`);
     }
-    if (existing.startsAt.getTime() - Date.now() < CANCEL_LEAD_MS) {
-      throw new ConflictException('Appointments can only be cancelled online at least 2 hours before they start; please contact the clinic');
+    if (existing.holdExpiresAt) {
+      const entry = await this.heldOfferEntry(p, existing.id);
+      if (entry) {
+        await this.waitlist.decline(this.actor(p), entry.id);
+        return this.appointment(p, id);
+      }
     }
+    if (!patientMayCancel(existing.startsAt)) throw new ConflictException(portalMessage('cancelTooLate', this.localeOf(p)));
     const note = dto.reason?.trim() ? `Cancelled by patient via portal: ${dto.reason.trim()}` : 'Cancelled by patient via portal';
     const cancelled = await this.prisma.transaction((tx) => this.writer.cancel(tx, existing.id, note));
     this.writer.emitCancelled(cancelled, p.id);
@@ -335,6 +396,19 @@ export class PortalService {
     const appt = await this.prisma.db.appointment.findFirst({ where: { id, clinicId: p.clinicId, patientId: p.id } });
     if (!appt) throw new NotFoundException('Appointment not found');
     return appt;
+  }
+
+  /** The appointment already booked under `idempotencyKey` (replayed), or null. Another patient's key → 409. */
+  private async replayByKey(p: PortalPatient, idempotencyKey: string): Promise<{ appointment: ReturnType<typeof toPortalAppointment>; replayed: true } | null> {
+    const existing = await this.prisma.db.appointment.findFirst({ where: { clinicId: p.clinicId, idempotencyKey }, include: { doctor: { select: doctorPublic } } });
+    if (!existing) return null;
+    if (existing.patientId !== p.id) throw new ConflictException('Idempotency-Key is already used');
+    return { appointment: toPortalAppointment(existing), replayed: true };
+  }
+
+  /** The patient's OFFERED waitlist entry whose held appointment is `appointmentId`. */
+  private heldOfferEntry(p: PortalPatient, appointmentId: string) {
+    return this.prisma.db.waitlistEntry.findFirst({ where: { clinicId: p.clinicId, patientId: p.id, offeredAppointmentId: appointmentId, status: 'OFFERED' }, select: { id: true } });
   }
 
   private async assertOwnEntry(p: PortalPatient, id: string) {

@@ -26,6 +26,23 @@ export const REPLY_INSTRUCTIONS: Record<Locale, string> = {
   ar: 'أرسل 1 للتأكيد أو 2 للإلغاء.',
 };
 
+/**
+ * Templates whose body carries `REPLY_INSTRUCTIONS`: a patient's `1` / `2` is
+ * applied to the appointment of the latest such message sent to their phone.
+ */
+export const REPLYABLE_TEMPLATES: readonly TemplateKey[] = ['appointment.reminder', 'appointment.confirmed'];
+
+/** Placeholder stored / logged instead of a secret template parameter. */
+export const SECRET_MASK = '******';
+
+/**
+ * Template parameters that are secrets (one-time codes): they are sent to the
+ * provider but never persisted in `messages.body` nor written to logs.
+ */
+export const SECRET_PARAMS: Partial<Record<TemplateKey, readonly string[]>> = {
+  'portal.otp': ['code'],
+};
+
 const TEMPLATES: Record<TemplateKey, Record<Locale, TemplateText>> = {
   'appointment.reminder': {
     en: {
@@ -111,8 +128,32 @@ export function renderTemplate(key: TemplateKey, locale: Locale, params: Templat
   return { subject: interpolate(t.subject, params).replace(/\s+/g, ' ').trim(), body: interpolate(t.body, params).replace(/[ \t]+/g, ' ').trim() };
 }
 
+/**
+ * `params` with every secret parameter of `key` replaced by `SECRET_MASK`, and
+ * the secrets themselves (empty when the template has none).
+ */
+export function splitSecretParams(key: TemplateKey, params: TemplateParams): { redacted: TemplateParams; secrets: Record<string, string> } {
+  const names = SECRET_PARAMS[key] ?? [];
+  const redacted: TemplateParams = { ...params };
+  const secrets: Record<string, string> = {};
+  for (const name of names) {
+    const v = params[name];
+    if (v === null || v === undefined || v === '') continue;
+    secrets[name] = String(v);
+    redacted[name] = SECRET_MASK;
+  }
+  return { redacted, secrets };
+}
+
+/** Masks one-time codes in an already rendered `portal.otp` body (rows written before codes were masked). */
+export function maskSecretsInBody(template: string | null, body: string): string {
+  return template === 'portal.otp' ? body.replace(/\d{4,8}/g, SECRET_MASK) : body;
+}
+
+export type InboundReplyKey = 'confirmed' | 'cancelled' | 'nothing' | 'unknown' | 'unknownPatient' | 'contactClinic' | 'tooLateToCancel' | 'offerDeclined';
+
 /** Localised acknowledgements sent back to inbound replies (TwiML body). */
-export const INBOUND_REPLIES: Record<'confirmed' | 'cancelled' | 'nothing' | 'unknown' | 'unknownPatient', Record<Locale, string>> = {
+export const INBOUND_REPLIES: Record<InboundReplyKey, Record<Locale, string>> = {
   confirmed: {
     en: 'Thank you, your appointment on {{when}} is confirmed.',
     ar: 'شكراً لك، تم تأكيد موعدك يوم {{when}}.',
@@ -132,6 +173,18 @@ export const INBOUND_REPLIES: Record<'confirmed' | 'cancelled' | 'nothing' | 'un
   unknownPatient: {
     en: 'This number is not registered with a clinic. Please contact your clinic directly.',
     ar: 'هذا الرقم غير مسجل لدى أي عيادة. يرجى التواصل مع عيادتك مباشرة.',
+  },
+  contactClinic: {
+    en: 'We could not match your reply to an upcoming appointment, so nothing was changed. Please contact the clinic directly.',
+    ar: 'لم نتمكن من ربط ردك بموعد قادم، لذلك لم يتم إجراء أي تغيير. يرجى التواصل مع العيادة مباشرة.',
+  },
+  tooLateToCancel: {
+    en: 'Your appointment on {{when}} starts in less than 2 hours and can no longer be cancelled by message. Please call the clinic.',
+    ar: 'موعدك يوم {{when}} يبدأ خلال أقل من ساعتين ولا يمكن إلغاؤه برسالة. يرجى الاتصال بالعيادة.',
+  },
+  offerDeclined: {
+    en: 'You declined the slot on {{when}}. You remain on the waiting list.',
+    ar: 'لقد رفضت الموعد المعروض يوم {{when}}. ستبقى على قائمة الانتظار.',
   },
 };
 

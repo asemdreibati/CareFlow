@@ -13,12 +13,16 @@ import {
   PortalSlotsQuery,
   PortalWaitlistDto,
   RequestOtpDto,
+  SelectPatientDto,
   UpdatePortalProfileDto,
   VerifyOtpDto,
 } from './portal.dto.js';
 import { PortalService } from './portal.service.js';
 
-/** Phone-OTP login (public, throttled per IP). */
+/**
+ * Phone-OTP login (public). Throttled per IP here and per (clinic, phone) in
+ * the service; request-otp always answers `{ sent: true }` after a fixed delay.
+ */
 @ApiTags('portal')
 @Controller('portal/auth')
 export class PortalAuthController {
@@ -40,6 +44,21 @@ export class PortalAuthController {
   @Audit({ action: 'portal.verifyOtp' })
   verify(@Body() dto: VerifyOtpDto) {
     return this.auth.verify(dto);
+  }
+
+  /**
+   * Shared phone: `verify` answered `{ requiresPatientSelection, candidates,
+   * selectionToken }`; this exchanges the token for the chosen patient's session.
+   * Not audited with the request body: the selection token is a short-lived
+   * credential and is not (yet) in the audit redaction list.
+   */
+  @Public()
+  @Post('select')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Audit({ action: 'portal.selectPatient' })
+  select(@Body() dto: SelectPatientDto) {
+    return this.auth.selectPatient(dto);
   }
 }
 
