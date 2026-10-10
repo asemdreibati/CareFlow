@@ -2,8 +2,9 @@
   "name": "web",
   "version": "0.0.0",
   "scripts": {
-    "ng": "ng",
     "start": "node scripts/ng.mjs serve",
+    "start:dev": "node scripts/ng.mjs serve",
+    "ng": "ng",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "node scripts/ng.mjs test"
